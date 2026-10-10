@@ -88,7 +88,7 @@ const createOrder = async (req, res) => {
         totalQuantity ||
         items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0),
       paymentMethod,
-      orderStatus: 'Shipped',
+      orderStatus: 'Pending',
       courierData: {
         provider: courierData?.provider || 'Steadfast',
         consignmentId,

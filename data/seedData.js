@@ -424,7 +424,7 @@ const initialOrders = [
     totalAmount: 640,
     totalQuantity: 3,
     paymentMethod: 'COD',
-    orderStatus: 'Shipped',
+    orderStatus: 'Pending',
     courierData: {
       provider: 'Steadfast',
       consignmentId: 521307,
