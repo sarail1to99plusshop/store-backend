@@ -1,0 +1,22 @@
+{
+  "name": "sarail-shop-backend",
+  "version": "1.0.0",
+  "description": "Node.js, Express.js, MongoDB & Mongoose Backend for Sarail 1 to 99 Plus Shop (Vercel Ready)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "seed": "node scripts/seed.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.10.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+
