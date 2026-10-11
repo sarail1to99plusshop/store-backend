@@ -7,6 +7,7 @@ const {
   createPreOrder,
 } = require('../controllers/orderController');
 
+router.get('/', getUserOrders);
 router.post('/', createOrder);
 router.get('/track', trackOrder);
 router.get('/user/:email', getUserOrders);

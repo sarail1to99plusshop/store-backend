@@ -196,34 +196,57 @@ const trackOrder = async (req, res) => {
   }
 };
 
-// GET /api/orders/user/:email
+// GET /api/orders or GET /api/orders/user/:email
+// Returns the user's order history sorted by newest first
 const getUserOrders = async (req, res) => {
   try {
-    const email = (req.params.email || '').trim().toLowerCase();
-    if (!email) {
+    const email = (req.params.email || req.query.email || '').trim().toLowerCase();
+    const userId = (req.query.userId || '').trim();
+
+    if (!email && !userId) {
       return res.status(400).json({
         success: false,
-        message: 'User email is required.',
+        message: 'User email or userId is required to fetch order history.',
       });
     }
 
     if (isMongoConnected()) {
-      const orders = await Order.find({ 'customerDetails.email': email })
+      const orConditions = [];
+      if (email) {
+        orConditions.push({
+          'customerDetails.email': { $regex: new RegExp(`^${email}$`, 'i') },
+        });
+      }
+      if (userId) {
+        orConditions.push({ userId });
+      }
+
+      const orders = await Order.find({ $or: orConditions })
         .sort({ createdAt: -1 })
         .lean();
 
       return res.status(200).json({
         success: true,
+        totalOrders: orders.length,
         orders,
       });
     }
 
-    const orders = memoryStore.orders.filter(
-      (o) => o.customerDetails?.email?.toLowerCase() === email
-    );
+    const orders = memoryStore.orders
+      .filter(
+        (o) =>
+          (email && o.customerDetails?.email?.toLowerCase() === email) ||
+          (userId && o.userId === userId)
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt?.$date || b.createdAt || 0) -
+          new Date(a.createdAt?.$date || a.createdAt || 0)
+      );
 
     return res.status(200).json({
       success: true,
+      totalOrders: orders.length,
       orders,
     });
   } catch (error) {
