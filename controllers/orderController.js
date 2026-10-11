@@ -310,10 +310,101 @@ const createPreOrder = async (req, res) => {
   }
 };
 
+// PATCH /api/orders/:invoiceNumber/cancel
+const cancelOrder = async (req, res) => {
+  try {
+    const inv = (req.params.invoiceNumber || req.body?.invoiceNumber || '').trim();
+
+    if (!inv) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice number is required to cancel an order.',
+      });
+    }
+
+    if (isMongoConnected()) {
+      const order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${inv}$`, 'i') },
+      });
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found.',
+        });
+      }
+
+      if (order.orderStatus === 'Shipped' || order.orderStatus === 'Delivered') {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot cancel order because it is already ${order.orderStatus}.`,
+        });
+      }
+
+      if (order.orderStatus === 'Cancelled') {
+        return res.status(400).json({
+          success: false,
+          message: 'This order is already cancelled.',
+        });
+      }
+
+      order.orderStatus = 'Cancelled';
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Order has been cancelled successfully.',
+        order,
+      });
+    }
+
+    const memOrder = memoryStore.orders.find(
+      (o) => o.invoiceNumber?.toLowerCase() === inv.toLowerCase()
+    );
+
+    if (!memOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found.',
+      });
+    }
+
+    if (memOrder.orderStatus === 'Shipped' || memOrder.orderStatus === 'Delivered') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel order because it is already ${memOrder.orderStatus}.`,
+      });
+    }
+
+    if (memOrder.orderStatus === 'Cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'This order is already cancelled.',
+      });
+    }
+
+    memOrder.orderStatus = 'Cancelled';
+    memOrder.updatedAt = new Date().toISOString();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order has been cancelled successfully.',
+      order: memOrder,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to cancel order.',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   createOrder,
   trackOrder,
   getUserOrders,
+  cancelOrder,
   createPreOrder,
 };
 
