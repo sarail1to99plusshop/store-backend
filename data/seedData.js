@@ -379,7 +379,15 @@ const initialProducts = [
       },
     ],
   },
-];
+].map((p) => ({
+  ...p,
+  collections: {
+    bestSelling: Boolean(p.tag?.toLowerCase().includes('best') || p.tag?.toLowerCase().includes('top')),
+    newArrival: Boolean(p.tag?.toLowerCase().includes('trending') || p.tag?.toLowerCase().includes('essential') || p.tag?.toLowerCase().includes('new')),
+    hotOffer: Boolean(p.discount || p.tag?.toLowerCase().includes('hot') || p.tag?.toLowerCase().includes('deal')),
+    popular: Boolean(p.tag?.toLowerCase().includes('popular') || p.id === 2 || p.id === 12),
+  },
+}));
 
 // No pre-seeded reviews — reviews and ratings are 100% dynamically created by users
 const initialReviews = [];

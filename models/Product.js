@@ -56,6 +56,12 @@ const productSchema = new mongoose.Schema(
       default: '',
       index: true,
     },
+    collections: {
+      bestSelling: { type: Boolean, default: false },
+      newArrival: { type: Boolean, default: false },
+      hotOffer: { type: Boolean, default: false },
+      popular: { type: Boolean, default: false },
+    },
     stock: {
       type: Number,
       default: 50,

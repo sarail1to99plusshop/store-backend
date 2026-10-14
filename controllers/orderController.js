@@ -16,6 +16,8 @@ const createOrder = async (req, res) => {
       totalAmount,
       totalQuantity,
       paymentMethod = 'COD',
+      paymentDetails = {},
+      trxId = '',
       courierData,
     } = req.body;
 
@@ -31,6 +33,47 @@ const createOrder = async (req, res) => {
         success: false,
         message: 'Order must contain at least one item.',
       });
+    }
+
+    const isBkash = paymentMethod === 'bKash';
+    const submittedTrx = (paymentDetails.trxId || trxId || '').trim().toUpperCase();
+
+    if (isBkash) {
+      if (!submittedTrx) {
+        return res.status(400).json({
+          success: false,
+          message: 'Transaction ID (TrxID) is required for bKash payments.',
+        });
+      }
+      if (submittedTrx.length < 6) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid bKash Transaction ID.',
+        });
+      }
+
+      // Check duplicate TrxID to prevent duplicate reuse
+      if (isMongoConnected()) {
+        const existingTrx = await Order.findOne({
+          'paymentDetails.trxId': submittedTrx,
+        }).lean();
+        if (existingTrx) {
+          return res.status(400).json({
+            success: false,
+            message: 'This Transaction ID has already been submitted for another order. Please check and provide the correct TrxID.',
+          });
+        }
+      } else {
+        const memTrx = memoryStore.orders.find(
+          (o) => o.paymentDetails?.trxId === submittedTrx
+        );
+        if (memTrx) {
+          return res.status(400).json({
+            success: false,
+            message: 'This Transaction ID has already been submitted for another order. Please check and provide the correct TrxID.',
+          });
+        }
+      }
     }
 
     const generatedInvoice =
@@ -53,6 +96,8 @@ const createOrder = async (req, res) => {
       );
 
     const computedTotal = totalAmount || computedSubtotal + Number(deliveryFee);
+
+    const initialPaymentStatus = isBkash ? 'Pending Verification' : 'Pending';
 
     const orderPayload = {
       invoiceNumber: generatedInvoice,
@@ -87,7 +132,19 @@ const createOrder = async (req, res) => {
       totalQuantity:
         totalQuantity ||
         items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0),
-      paymentMethod,
+      paymentMethod: isBkash ? 'bKash' : 'COD',
+      paymentStatus: initialPaymentStatus,
+      paymentDetails: {
+        mode: paymentDetails.mode || 'full',
+        bKashNumber: '01998789157',
+        trxId: submittedTrx,
+        senderPhone: paymentDetails.senderPhone || '',
+        expectedAmount: computedTotal,
+        submittedAt: new Date(),
+        verifiedAt: null,
+        verifiedBy: '',
+        verificationNote: '',
+      },
       orderStatus: 'Pending',
       courierData: {
         provider: courierData?.provider || 'Steadfast',
@@ -400,11 +457,80 @@ const cancelOrder = async (req, res) => {
   }
 };
 
+// PATCH /api/orders/:invoiceNumber/payment-status
+const updatePaymentStatus = async (req, res) => {
+  try {
+    const inv = (req.params.invoiceNumber || req.body?.invoiceNumber || '').trim();
+    const { paymentStatus, note = '', verifiedBy = 'Admin' } = req.body;
+
+    const allowed = ['Pending Verification', 'Verified', 'Rejected', 'Correction Requested', 'Pending', 'Paid'];
+    if (!allowed.includes(paymentStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid paymentStatus. Must be one of: ${allowed.join(', ')}`,
+      });
+    }
+
+    if (isMongoConnected()) {
+      const order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${inv}$`, 'i') },
+      });
+
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+
+      order.paymentStatus = paymentStatus;
+      if (!order.paymentDetails) order.paymentDetails = {};
+      order.paymentDetails.verifiedAt = new Date();
+      order.paymentDetails.verifiedBy = verifiedBy;
+      if (note) order.paymentDetails.verificationNote = note;
+
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Payment status updated to ${paymentStatus}.`,
+        order,
+      });
+    }
+
+    const memOrder = memoryStore.orders.find(
+      (o) => o.invoiceNumber?.toLowerCase() === inv.toLowerCase()
+    );
+
+    if (!memOrder) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    memOrder.paymentStatus = paymentStatus;
+    if (!memOrder.paymentDetails) memOrder.paymentDetails = {};
+    memOrder.paymentDetails.verifiedAt = new Date().toISOString();
+    memOrder.paymentDetails.verifiedBy = verifiedBy;
+    if (note) memOrder.paymentDetails.verificationNote = note;
+    memOrder.updatedAt = new Date().toISOString();
+
+    return res.status(200).json({
+      success: true,
+      message: `Payment status updated to ${paymentStatus}.`,
+      order: memOrder,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update payment status.',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   createOrder,
   trackOrder,
   getUserOrders,
   cancelOrder,
   createPreOrder,
+  updatePaymentStatus,
 };
+
 

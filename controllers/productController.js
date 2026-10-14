@@ -15,6 +15,7 @@ const getProducts = async (req, res) => {
       limit = 10,
       category = 'all',
       tag = 'all',
+      collection = 'all',
       search = '',
       sort = 'featured',
       all = 'false',
@@ -26,6 +27,29 @@ const getProducts = async (req, res) => {
 
     let rawProducts = [];
     let allAvailableTags = [];
+
+    const normalizeCollections = (p) => {
+      const existing = p.collections || {};
+      const tagLower = (p.tag || '').toLowerCase();
+      return {
+        bestSelling:
+          existing.bestSelling !== undefined
+            ? Boolean(existing.bestSelling)
+            : Boolean(tagLower.includes('best') || tagLower.includes('top')),
+        newArrival:
+          existing.newArrival !== undefined
+            ? Boolean(existing.newArrival)
+            : Boolean(tagLower.includes('trending') || tagLower.includes('essential') || tagLower.includes('new')),
+        hotOffer:
+          existing.hotOffer !== undefined
+            ? Boolean(existing.hotOffer)
+            : Boolean(p.discount || tagLower.includes('hot') || tagLower.includes('deal')),
+        popular:
+          existing.popular !== undefined
+            ? Boolean(existing.popular)
+            : Boolean(tagLower.includes('popular')),
+      };
+    };
 
     if (isMongoConnected()) {
       const [dbProducts, reviewAgg] = await Promise.all([
@@ -55,6 +79,7 @@ const getProducts = async (req, res) => {
         const stats = statsMap.get(Number(p.id)) || { rating: 0, reviews: 0 };
         return {
           ...p,
+          collections: normalizeCollections(p),
           rating: stats.rating,
           reviews: stats.reviews,
         };
@@ -67,6 +92,7 @@ const getProducts = async (req, res) => {
         const { averageRating, totalReviews } = computeRatingStats(prodReviews);
         return {
           ...p,
+          collections: normalizeCollections(p),
           rating: averageRating,
           reviews: totalReviews,
         };
@@ -83,6 +109,7 @@ const getProducts = async (req, res) => {
     // Filter products
     const normalizedCat = category.toLowerCase().replace(/[\s&]+/g, '-');
     const normalizedTag = tag.toLowerCase().trim();
+    const normalizedCol = collection.toLowerCase().trim();
     const normalizedSearch = search.toLowerCase().trim();
 
     let filtered = rawProducts.filter((product) => {
@@ -98,6 +125,15 @@ const getProducts = async (req, res) => {
         !tag ||
         (product.tag && product.tag.toLowerCase() === normalizedTag);
 
+      const pCols = product.collections || {};
+      const matchesCollection =
+        normalizedCol === 'all' ||
+        !normalizedCol ||
+        (normalizedCol === 'bestselling' && pCols.bestSelling) ||
+        (normalizedCol === 'newarrival' && pCols.newArrival) ||
+        (normalizedCol === 'hotoffer' && pCols.hotOffer) ||
+        (normalizedCol === 'popular' && pCols.popular);
+
       const matchesSearch =
         !normalizedSearch ||
         (product.name && product.name.toLowerCase().includes(normalizedSearch)) ||
@@ -105,7 +141,7 @@ const getProducts = async (req, res) => {
         (product.tag && product.tag.toLowerCase().includes(normalizedSearch)) ||
         (product.description && product.description.toLowerCase().includes(normalizedSearch));
 
-      return matchesCategory && matchesTag && matchesSearch;
+      return matchesCategory && matchesTag && matchesCollection && matchesSearch;
     });
 
     // Sorting
