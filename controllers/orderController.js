@@ -38,7 +38,17 @@ const createOrder = async (req, res) => {
     const isBkash = paymentMethod === 'bKash';
     const submittedTrx = (paymentDetails.trxId || trxId || '').trim().toUpperCase();
 
+    // Validate payment mode on server
+    let paymentMode = 'full';
     if (isBkash) {
+      paymentMode = (paymentDetails.mode || 'full').toLowerCase();
+      if (!['full', 'delivery'].includes(paymentMode)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid bKash payment mode. Allowed modes: "full" or "delivery".',
+        });
+      }
+
       if (!submittedTrx) {
         return res.status(400).json({
           success: false,
@@ -88,14 +98,32 @@ const createOrder = async (req, res) => {
       courierData?.trackingCode ||
       `SF${Math.floor(10000000 + Math.random() * 90000000)}`;
 
-    const computedSubtotal =
-      itemsSubtotal ||
-      items.reduce(
-        (acc, it) => acc + (Number(it.price) || 0) * (Number(it.quantity) || 1),
-        0
-      );
+    // Trusted server-side calculations
+    const validatedDeliveryFee = Math.max(0, Number(deliveryFee) || 0);
 
-    const computedTotal = totalAmount || computedSubtotal + Number(deliveryFee);
+    if (isBkash && paymentMode === 'delivery' && validatedDeliveryFee <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Delivery charge only mode requires a delivery fee greater than zero.',
+      });
+    }
+
+    const computedSubtotal = items.reduce(
+      (acc, it) => acc + (Number(it.price) || 0) * Math.max(1, Number(it.quantity) || 1),
+      0
+    );
+
+    const computedTotal = computedSubtotal + validatedDeliveryFee;
+
+    // Expected prepaid amount calculation:
+    // - COD: 0 (pays upon delivery)
+    // - bKash Full: computedTotal (pays full invoice in advance)
+    // - bKash Delivery: validatedDeliveryFee (pays only delivery fee in advance, subtotal on delivery)
+    const expectedPrepaidAmount = isBkash
+      ? paymentMode === 'delivery'
+        ? validatedDeliveryFee
+        : computedTotal
+      : 0;
 
     const initialPaymentStatus = isBkash ? 'Pending Verification' : 'Pending';
 
@@ -108,14 +136,16 @@ const createOrder = async (req, res) => {
         phone: customerDetails.phone,
         address: customerDetails.address,
         note: customerDetails.note || '',
-        deliveryLocation: customerDetails.deliveryLocation || 'Inside Dhaka',
+        deliveryLocation:
+          customerDetails.deliveryLocation ||
+          (validatedDeliveryFee === 120 ? 'Outside Dhaka' : 'Inside Dhaka'),
       },
       items: items.map((item) => ({
         product: item.product,
         productId: Number(item.productId) || undefined,
         title: item.title || item.name,
         price: Number(item.price) || 0,
-        quantity: Number(item.quantity) || 1,
+        quantity: Math.max(1, Number(item.quantity) || 1),
         color: item.color || item.selectedVariant?.colorName || 'Standard',
         colorCode: item.colorCode || item.selectedVariant?.colorCode || '',
         selectedVariant: {
@@ -124,22 +154,23 @@ const createOrder = async (req, res) => {
         },
         image: item.image || '',
         category: item.category || 'General',
-        subtotal: (Number(item.price) || 0) * (Number(item.quantity) || 1),
+        subtotal: (Number(item.price) || 0) * Math.max(1, Number(item.quantity) || 1),
       })),
-      deliveryFee: Number(deliveryFee),
+      deliveryFee: validatedDeliveryFee,
       itemsSubtotal: computedSubtotal,
       totalAmount: computedTotal,
-      totalQuantity:
-        totalQuantity ||
-        items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0),
+      totalQuantity: items.reduce(
+        (acc, it) => acc + Math.max(1, Number(it.quantity) || 1),
+        0
+      ),
       paymentMethod: isBkash ? 'bKash' : 'COD',
       paymentStatus: initialPaymentStatus,
       paymentDetails: {
-        mode: paymentDetails.mode || 'full',
+        mode: isBkash ? paymentMode : 'full',
         bKashNumber: '01998789157',
-        trxId: submittedTrx,
+        trxId: isBkash ? submittedTrx : '',
         senderPhone: paymentDetails.senderPhone || '',
-        expectedAmount: computedTotal,
+        expectedAmount: expectedPrepaidAmount,
         submittedAt: new Date(),
         verifiedAt: null,
         verifiedBy: '',
