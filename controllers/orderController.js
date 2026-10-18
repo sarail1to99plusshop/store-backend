@@ -181,8 +181,10 @@ const createOrder = async (req, res) => {
     const isBkash = paymentMethod === 'bKash';
     const submittedTrx = (paymentDetails.trxId || trxId || '').trim().toUpperCase();
 
+    // Validate payment mode on server
+    let paymentMode = 'full';
     if (isBkash) {
-      if (!submittedTrx || submittedTrx.length < 6) {
+      if (!submittedTrx) {
         return res.status(400).json({
           success: false,
           message: 'A valid bKash Transaction ID (minimum 6 characters) is required.',
@@ -291,6 +293,15 @@ const createOrder = async (req, res) => {
       courierData?.trackingCode ||
       `SF${Math.floor(10000000 + Math.random() * 90000000)}`;
 
+    const computedSubtotal =
+      itemsSubtotal ||
+      items.reduce(
+        (acc, it) => acc + (Number(it.price) || 0) * (Number(it.quantity) || 1),
+        0
+      );
+
+    const computedTotal = totalAmount || computedSubtotal + Number(deliveryFee);
+
     const initialPaymentStatus = isBkash ? 'Pending Verification' : 'Pending';
 
     // 9. Build Verified Order Payload
@@ -298,26 +309,43 @@ const createOrder = async (req, res) => {
       invoiceNumber: generatedInvoice,
       userId: String(userId || '').trim(),
       customerDetails: {
-        name: customerDetails.name.trim(),
-        email: (customerDetails.email || '').trim().toLowerCase(),
-        phone: customerDetails.phone.trim(),
-        address: customerDetails.address.trim(),
-        note: (customerDetails.note || '').trim(),
-        deliveryLocation: verifiedDeliveryLocation,
+        name: customerDetails.name,
+        email: customerDetails.email || '',
+        phone: customerDetails.phone,
+        address: customerDetails.address,
+        note: customerDetails.note || '',
+        deliveryLocation: customerDetails.deliveryLocation || 'Inside Dhaka',
       },
-      items: verifiedItems,
-      deliveryFee: verifiedDeliveryFee,
-      itemsSubtotal: calculatedSubtotal,
-      totalAmount: verifiedTotalAmount,
-      totalQuantity: calculatedTotalQty,
+      items: items.map((item) => ({
+        product: item.product,
+        productId: Number(item.productId) || undefined,
+        title: item.title || item.name,
+        price: Number(item.price) || 0,
+        quantity: Number(item.quantity) || 1,
+        color: item.color || item.selectedVariant?.colorName || 'Standard',
+        colorCode: item.colorCode || item.selectedVariant?.colorCode || '',
+        selectedVariant: {
+          colorName: item.color || item.selectedVariant?.colorName || 'Standard',
+          colorCode: item.colorCode || item.selectedVariant?.colorCode || '',
+        },
+        image: item.image || '',
+        category: item.category || 'General',
+        subtotal: (Number(item.price) || 0) * (Number(item.quantity) || 1),
+      })),
+      deliveryFee: Number(deliveryFee),
+      itemsSubtotal: computedSubtotal,
+      totalAmount: computedTotal,
+      totalQuantity:
+        totalQuantity ||
+        items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0),
       paymentMethod: isBkash ? 'bKash' : 'COD',
       paymentStatus: initialPaymentStatus,
       paymentDetails: {
-        mode: paymentDetails.mode || 'full',
+        mode: isBkash ? paymentMode : 'full',
         bKashNumber: '01998789157',
-        trxId: submittedTrx,
+        trxId: isBkash ? submittedTrx : '',
         senderPhone: paymentDetails.senderPhone || '',
-        expectedAmount: verifiedTotalAmount,
+        expectedAmount: computedTotal,
         submittedAt: new Date(),
         verifiedAt: null,
         verifiedBy: '',
