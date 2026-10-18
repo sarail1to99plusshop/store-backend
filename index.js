@@ -35,23 +35,54 @@ app.use(
   })
 );
 
-// Strict CORS: Restrict origin strictly to allowed origins array
-const allowedOrigins = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
+// Configured CORS Allowed Origins
+const configuredOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:5175',
+  'http://127.0.0.1:3000',
+  
+]
+  .filter(Boolean)
+  .map((url) => url.trim().replace(/\/+$/, ''));
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow server-to-server, mobile requests, or whitelisted frontend/admin origins
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error(`Blocked by CORS: Origin ${origin} not allowed.`));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser requests (server-to-server, curl, Postman, mobile apps)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    const cleanOrigin = origin.trim().replace(/\/+$/, '');
+
+    // Allow configured origins or any vercel.app deployment / local ports
+    const isAllowed =
+      configuredOrigins.includes(cleanOrigin) ||
+      cleanOrigin.endsWith('.vercel.app') ||
+      cleanOrigin.includes('localhost:') ||
+      cleanOrigin.includes('127.0.0.1:');
+
+    if (isAllowed) {
+      return callback(null, true);
+    }
+
+    // Returning false instead of throwing Error prevents 500 status on preflight OPTIONS
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
