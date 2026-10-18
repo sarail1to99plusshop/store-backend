@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const mongoSanitize = require('express-mongo-sanitize');
 const { connectDB, isMongoConnected } = require('./config/db');
 const { getDeliveryCharges } = require('./controllers/categoryController');
 const { createPreOrder } = require('./controllers/orderController');
@@ -10,21 +12,52 @@ const productRoutes = require('./routes/productRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
 
-// Enable CORS for frontend and Vercel preview/production domains
+// Trust reverse proxy (Vercel / Nginx)
+app.set('trust proxy', 1);
+
+// HTTP Hardening: Helmet with standard e-commerce security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+        connectSrc: ["'self'", 'https:'],
+      },
+    },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+// Strict CORS: Restrict origin strictly to allowed origins array
+const allowedOrigins = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
+
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      // Allow server-to-server, mobile requests, or whitelisted frontend/admin origins
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Blocked by CORS: Origin ${origin} not allowed.`));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
   })
 );
 
-app.use(express.json({ limit: '5mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// NoSQL Injection Sanitization: scrub keys starting with '$' or '.'
+app.use(mongoSanitize({ replaceWith: '_' }));
 
 // Serverless DB connection middleware: ensures Mongoose connects on Vercel cold starts
 app.use(async (req, res, next) => {
@@ -69,6 +102,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Convenience top-level endpoints
 app.get('/api/delivery-charges', getDeliveryCharges);
