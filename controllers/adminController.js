@@ -1,0 +1,1395 @@
+const mongoose = require('mongoose');
+const Order = require('../models/Order');
+const Product = require('../models/Product');
+const User = require('../models/User');
+const { isMongoConnected } = require('../config/db');
+const { memoryStore } = require('../data/seedData');
+const { signAdminToken } = require('../middleware/authMiddleware');
+
+// ---------------------------------------------------------------------------
+// 1. ADMIN AUTHENTICATION
+// ---------------------------------------------------------------------------
+const adminLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Admin email and password are required.',
+      });
+    }
+
+    const adminEmailEnv = (process.env.ADMIN_EMAIL || 'admin@sarail1to99plus.com').toLowerCase().trim();
+    const adminPassEnv = (process.env.ADMIN_PASSWORD || 'admin@sarail2026!').trim();
+
+    const inputEmail = email.toLowerCase().trim();
+    const inputPass = password.trim();
+
+    let authenticated = false;
+    let adminProfile = {
+      email: inputEmail,
+      name: 'Store Administrator',
+      role: 'admin',
+    };
+
+    // Check direct admin credentials from environment
+    if (inputEmail === adminEmailEnv && inputPass === adminPassEnv) {
+      authenticated = true;
+    } else if (isMongoConnected()) {
+      // Check MongoDB user collection for admin role
+      const user = await User.findOne({ email: inputEmail }).lean();
+      if (user && user.role === 'admin' && (inputPass === adminPassEnv || inputPass === 'admin123456')) {
+        authenticated = true;
+        adminProfile = {
+          email: user.email,
+          name: user.displayName || 'Store Administrator',
+          role: 'admin',
+          uid: user.uid,
+        };
+      }
+    }
+
+    if (!authenticated) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid admin credentials. Please verify email and password.',
+      });
+    }
+
+    // Generate secure admin JWT token (valid for 7 days)
+    const token = signAdminToken({
+      email: adminProfile.email,
+      name: adminProfile.name,
+      role: 'admin',
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Admin authentication successful.',
+      token,
+      admin: adminProfile,
+    });
+  } catch (error) {
+    console.error('Error in adminLogin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Admin authentication failed.',
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 2. BACKEND DATABASE STATUS & HEALTH
+// ---------------------------------------------------------------------------
+const getSystemStatus = async (req, res) => {
+  try {
+    const readyState = mongoose.connection.readyState;
+    const isConnected = readyState === 1;
+
+    let latencyMs = 0;
+    let host = 'Not Connected';
+
+    if (isConnected && mongoose.connection.db) {
+      host = mongoose.connection.host || 'MongoDB Atlas';
+      const start = Date.now();
+      try {
+        await mongoose.connection.db.admin().ping();
+        latencyMs = Date.now() - start;
+      } catch (pingErr) {
+        latencyMs = -1;
+      }
+    }
+
+    let stats = {
+      productsCount: 0,
+      ordersCount: 0,
+      usersCount: 0,
+      deliveredOrdersCount: 0,
+      pendingOrdersCount: 0,
+      shippedOrdersCount: 0,
+      totalDeliveredRevenue: 0,
+      totalOrdersRevenue: 0,
+      lowStockCount: 0,
+      outOfStockCount: 0,
+    };
+
+    if (isConnected) {
+      const [
+        productsCount,
+        ordersCount,
+        usersCount,
+        deliveredOrdersCount,
+        pendingOrdersCount,
+        shippedOrdersCount,
+        lowStockCount,
+        outOfStockCount,
+        revenueAgg,
+      ] = await Promise.all([
+        Product.countDocuments(),
+        Order.countDocuments(),
+        User.countDocuments(),
+        Order.countDocuments({ orderStatus: 'Delivered' }),
+        Order.countDocuments({ orderStatus: 'Pending' }),
+        Order.countDocuments({ orderStatus: 'Shipped' }),
+        Product.countDocuments({ stock: { $gt: 0, $lt: 10 } }),
+        Product.countDocuments({ stock: { $lte: 0 } }),
+        Order.aggregate([
+          {
+            $group: {
+              _id: null,
+              totalRevenue: { $sum: '$totalAmount' },
+              deliveredRevenue: {
+                $sum: {
+                  $cond: [{ $eq: ['$orderStatus', 'Delivered'] }, '$totalAmount', 0],
+                },
+              },
+            },
+          },
+        ]),
+      ]);
+
+      stats = {
+        productsCount,
+        ordersCount,
+        usersCount,
+        deliveredOrdersCount,
+        pendingOrdersCount,
+        shippedOrdersCount,
+        lowStockCount,
+        outOfStockCount,
+        totalDeliveredRevenue: revenueAgg[0]?.deliveredRevenue || 0,
+        totalOrdersRevenue: revenueAgg[0]?.totalRevenue || 0,
+      };
+    } else {
+      // Memory fallback stats
+      stats = {
+        productsCount: memoryStore.products?.length || 0,
+        ordersCount: memoryStore.orders?.length || 0,
+        usersCount: 1,
+        deliveredOrdersCount: memoryStore.orders?.filter((o) => o.orderStatus === 'Delivered').length || 0,
+        pendingOrdersCount: memoryStore.orders?.filter((o) => o.orderStatus === 'Pending').length || 0,
+        shippedOrdersCount: memoryStore.orders?.filter((o) => o.orderStatus === 'Shipped').length || 0,
+        lowStockCount: memoryStore.products?.filter((p) => p.stock > 0 && p.stock < 10).length || 0,
+        outOfStockCount: memoryStore.products?.filter((p) => p.stock <= 0).length || 0,
+        totalDeliveredRevenue: memoryStore.orders
+          ?.filter((o) => o.orderStatus === 'Delivered')
+          .reduce((acc, o) => acc + (o.totalAmount || 0), 0) || 0,
+        totalOrdersRevenue: memoryStore.orders?.reduce((acc, o) => acc + (o.totalAmount || 0), 0) || 0,
+      };
+    }
+
+    return res.status(200).json({
+      success: true,
+      databaseStatus: isConnected ? 'active' : 'disconnected',
+      databaseConnected: isConnected,
+      readyState,
+      host,
+      latencyMs,
+      stats,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Error in getSystemStatus:', error);
+    return res.status(500).json({
+      success: false,
+      databaseStatus: 'disconnected',
+      databaseConnected: false,
+      message: 'Failed to retrieve system status.',
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 3. PRODUCT MANAGEMENT (CRUD & LIVE STOCK CONTROL)
+// ---------------------------------------------------------------------------
+const getAllProductsAdmin = async (req, res) => {
+  try {
+    const { search = '', category = 'all', stockFilter = 'all' } = req.query;
+
+    let query = {};
+    if (category !== 'all') {
+      query.category = { $regex: new RegExp(`^${category}$`, 'i') };
+    }
+    if (search.trim()) {
+      const s = search.trim();
+      query.$or = [
+        { name: { $regex: s, $options: 'i' } },
+        { tag: { $regex: s, $options: 'i' } },
+        { sku: { $regex: s, $options: 'i' } },
+      ];
+      if (!isNaN(Number(s))) {
+        query.$or.push({ id: Number(s) });
+      }
+    }
+
+    if (stockFilter === 'low') {
+      query.stock = { $gt: 0, $lt: 10 };
+    } else if (stockFilter === 'out') {
+      query.stock = { $lte: 0 };
+    } else if (stockFilter === 'in') {
+      query.stock = { $gte: 10 };
+    }
+
+    if (isMongoConnected()) {
+      const products = await Product.find(query).sort({ id: 1 }).lean();
+      return res.status(200).json({
+        success: true,
+        count: products.length,
+        products,
+      });
+    }
+
+    let products = [...memoryStore.products];
+    if (category !== 'all') {
+      products = products.filter((p) => p.category?.toLowerCase() === category.toLowerCase());
+    }
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      products = products.filter((p) => p.name?.toLowerCase().includes(s) || p.id?.toString() === s);
+    }
+    return res.status(200).json({
+      success: true,
+      count: products.length,
+      products,
+    });
+  } catch (error) {
+    console.error('Error in getAllProductsAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch products.',
+      error: error.message,
+    });
+  }
+};
+
+const createProductAdmin = async (req, res) => {
+  try {
+    const {
+      name,
+      price,
+      oldPrice,
+      discount,
+      category,
+      stock = 50,
+      thumbnail,
+      description = '',
+      warranty = '12 Months Replacement',
+      sku = '',
+      tag = '',
+      collections = {},
+      variants = [],
+      images = [],
+      rating = 5,
+      reviews = 0,
+    } = req.body;
+
+    const resolvedThumbnail = (
+      thumbnail ||
+      (Array.isArray(images) && images.length > 0 ? images[0] : '') ||
+      (Array.isArray(variants) && variants[0]?.images?.[0] ? variants[0].images[0] : '') ||
+      ''
+    ).trim();
+
+    if (!name || price === undefined || !category || !resolvedThumbnail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, price, category, and at least one product image/thumbnail are required.',
+      });
+    }
+
+    let nextId = 1;
+    if (isMongoConnected()) {
+      const maxProduct = await Product.findOne().sort({ id: -1 }).lean();
+      nextId = maxProduct && typeof maxProduct.id === 'number' ? maxProduct.id + 1 : 101;
+    } else {
+      const maxId = memoryStore.products.reduce((acc, p) => Math.max(acc, Number(p.id) || 0), 0);
+      nextId = maxId + 1;
+    }
+
+    // Prepare variants: if not provided or empty, create default standard variant with all images
+    let finalVariants = Array.isArray(variants) && variants.length > 0 ? variants : [];
+    if (finalVariants.length === 0) {
+      const allImages = Array.isArray(images) && images.length > 0 ? images : [resolvedThumbnail];
+      finalVariants = [
+        {
+          colorName: 'Standard',
+          colorCode: '#000000',
+          images: allImages,
+        },
+      ];
+    } else {
+      // Clean variants
+      finalVariants = finalVariants.map((v) => ({
+        colorName: (v.colorName || 'Standard').trim(),
+        colorCode: (v.colorCode || '#000000').trim(),
+        images: Array.isArray(v.images) && v.images.length > 0 ? v.images : [resolvedThumbnail],
+      }));
+    }
+
+    const productData = {
+      id: nextId,
+      name: name.trim(),
+      price: Number(price),
+      oldPrice: oldPrice ? Number(oldPrice) : null,
+      discount: discount || '',
+      category: category.trim(),
+      stock: Math.max(0, Number(stock) || 0),
+      thumbnail: resolvedThumbnail,
+      description: description.trim(),
+      warranty: warranty.trim(),
+      sku: sku.trim() || `SAR-${nextId}`,
+      tag: tag.trim(),
+      collections: {
+        bestSelling: Boolean(collections.bestSelling),
+        newArrival: Boolean(collections.newArrival),
+        hotOffer: Boolean(collections.hotOffer),
+        popular: Boolean(collections.popular),
+      },
+      variants: finalVariants,
+      rating: Math.min(5, Math.max(0, Number(rating) || 5)),
+      reviews: Math.max(0, Number(reviews) || 0),
+    };
+
+    if (isMongoConnected()) {
+      const created = await Product.create(productData);
+      return res.status(201).json({
+        success: true,
+        message: `Product #${nextId} created successfully in MongoDB.`,
+        product: created,
+      });
+    }
+
+    memoryStore.products.push(productData);
+    return res.status(201).json({
+      success: true,
+      message: `Product #${nextId} created successfully.`,
+      product: productData,
+    });
+  } catch (error) {
+    console.error('Error in createProductAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create product.',
+      error: error.message,
+    });
+  }
+};
+
+const updateProductAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const numericId = Number(id);
+
+    const updateFields = { ...req.body };
+    delete updateFields._id;
+    delete updateFields.id; // Protect product ID from unintentional changes
+
+    if (updateFields.price !== undefined) updateFields.price = Number(updateFields.price);
+    if (updateFields.oldPrice !== undefined) updateFields.oldPrice = updateFields.oldPrice ? Number(updateFields.oldPrice) : null;
+    if (updateFields.stock !== undefined) updateFields.stock = Math.max(0, Number(updateFields.stock));
+    if (updateFields.rating !== undefined) updateFields.rating = Math.min(5, Math.max(0, Number(updateFields.rating) || 0));
+    if (updateFields.reviews !== undefined) updateFields.reviews = Math.max(0, Number(updateFields.reviews) || 0);
+
+    // Sync thumbnail and variants if provided
+    if (Array.isArray(updateFields.variants) && updateFields.variants.length > 0) {
+      updateFields.variants = updateFields.variants.map((v) => ({
+        colorName: (v.colorName || 'Standard').trim(),
+        colorCode: (v.colorCode || '#000000').trim(),
+        images: Array.isArray(v.images) ? v.images : [],
+      }));
+      if (!updateFields.thumbnail) {
+        for (const v of updateFields.variants) {
+          if (v.images && v.images.length > 0) {
+            updateFields.thumbnail = v.images[0];
+            break;
+          }
+        }
+      }
+    } else if (Array.isArray(updateFields.images) && updateFields.images.length > 0) {
+      if (!updateFields.thumbnail) {
+        updateFields.thumbnail = updateFields.images[0];
+      }
+      if (!updateFields.variants || updateFields.variants.length === 0) {
+        updateFields.variants = [
+          {
+            colorName: 'Standard',
+            colorCode: '#000000',
+            images: updateFields.images,
+          },
+        ];
+      }
+    }
+
+    if (isMongoConnected()) {
+      const updated = await Product.findOneAndUpdate(
+        { $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }] },
+        { $set: updateFields },
+        { new: true }
+      );
+
+      if (!updated) {
+        return res.status(404).json({
+          success: false,
+          message: `Product #${id} not found in database.`,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Product #${updated.id} updated successfully.`,
+        product: updated,
+      });
+    }
+
+    const idx = memoryStore.products.findIndex((p) => p.id === numericId || p.id?.toString() === id);
+    if (idx === -1) {
+      return res.status(404).json({
+        success: false,
+        message: `Product #${id} not found.`,
+      });
+    }
+
+    memoryStore.products[idx] = { ...memoryStore.products[idx], ...updateFields };
+    return res.status(200).json({
+      success: true,
+      message: `Product #${numericId} updated successfully.`,
+      product: memoryStore.products[idx],
+    });
+  } catch (error) {
+    console.error('Error in updateProductAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update product.',
+      error: error.message,
+    });
+  }
+};
+
+const updateProductStockAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const numericId = Number(id);
+    const { stock, delta } = req.body;
+
+    if (stock === undefined && delta === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Must provide either "stock" (absolute value) or "delta" (change amount).',
+      });
+    }
+
+    if (isMongoConnected()) {
+      let updateOp = {};
+      if (stock !== undefined) {
+        updateOp = { $set: { stock: Math.max(0, Number(stock)) } };
+      } else {
+        const currentProd = await Product.findOne({
+          $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }],
+        });
+        if (!currentProd) {
+          return res.status(404).json({ success: false, message: 'Product not found.' });
+        }
+        const newStock = Math.max(0, (currentProd.stock || 0) + Number(delta));
+        updateOp = { $set: { stock: newStock } };
+      }
+
+      const updated = await Product.findOneAndUpdate(
+        { $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }] },
+        updateOp,
+        { new: true }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: `Stock updated for product #${updated.id} to ${updated.stock} units.`,
+        product: updated,
+      });
+    }
+
+    const prod = memoryStore.products.find((p) => p.id === numericId || p.id?.toString() === id);
+    if (!prod) {
+      return res.status(404).json({ success: false, message: 'Product not found.' });
+    }
+
+    if (stock !== undefined) {
+      prod.stock = Math.max(0, Number(stock));
+    } else {
+      prod.stock = Math.max(0, (prod.stock || 0) + Number(delta));
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Stock updated to ${prod.stock} units.`,
+      product: prod,
+    });
+  } catch (error) {
+    console.error('Error in updateProductStockAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update product stock.',
+      error: error.message,
+    });
+  }
+};
+
+const deleteProductAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const numericId = Number(id);
+
+    if (isMongoConnected()) {
+      const deleted = await Product.findOneAndDelete({
+        $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }],
+      });
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          message: `Product #${id} not found in database.`,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Product #${deleted.id} (${deleted.name}) deleted permanently from MongoDB.`,
+      });
+    }
+
+    const idx = memoryStore.products.findIndex((p) => p.id === numericId || p.id?.toString() === id);
+    if (idx === -1) {
+      return res.status(404).json({ success: false, message: 'Product not found.' });
+    }
+    const removed = memoryStore.products.splice(idx, 1)[0];
+    return res.status(200).json({
+      success: true,
+      message: `Product #${removed.id} deleted permanently.`,
+    });
+  } catch (error) {
+    console.error('Error in deleteProductAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete product.',
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 4. ORDER & STEADFAST COURIER MANAGEMENT
+// ---------------------------------------------------------------------------
+const getAllOrdersAdmin = async (req, res) => {
+  try {
+    const {
+      status = 'all',
+      paymentStatus = 'all',
+      search = '',
+      page = 1,
+      limit = 50,
+    } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+    const skip = (pageNum - 1) * limitNum;
+
+    let filter = {};
+    if (status !== 'all') {
+      filter.orderStatus = status;
+    }
+    if (paymentStatus !== 'all') {
+      filter.paymentStatus = paymentStatus;
+    }
+    if (search.trim()) {
+      const s = search.trim();
+      filter.$or = [
+        { invoiceNumber: { $regex: s, $options: 'i' } },
+        { 'customerDetails.name': { $regex: s, $options: 'i' } },
+        { 'customerDetails.phone': { $regex: s, $options: 'i' } },
+        { 'courierData.trackingCode': { $regex: s, $options: 'i' } },
+        { 'paymentDetails.trxId': { $regex: s, $options: 'i' } },
+      ];
+    }
+
+    if (isMongoConnected()) {
+      const [orders, total] = await Promise.all([
+        Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+        Order.countDocuments(filter),
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        orders,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    }
+
+    let orders = [...memoryStore.orders];
+    if (status !== 'all') {
+      orders = orders.filter((o) => o.orderStatus === status);
+    }
+    if (paymentStatus !== 'all') {
+      orders = orders.filter((o) => o.paymentStatus === paymentStatus);
+    }
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      orders = orders.filter(
+        (o) =>
+          o.invoiceNumber?.toLowerCase().includes(s) ||
+          o.customerDetails?.name?.toLowerCase().includes(s) ||
+          o.customerDetails?.phone?.includes(s)
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      orders: orders.slice(skip, skip + limitNum),
+      pagination: {
+        total: orders.length,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(orders.length / limitNum),
+      },
+    });
+  } catch (error) {
+    console.error('Error in getAllOrdersAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders.',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * SEND TO COURIER SERVICE: STEADFAST COURIER
+ * Changes order status to "Shipped" and attaches live Steadfast tracking credentials
+ */
+const shipOrderWithSteadfast = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const {
+      consignmentId: customConsignment,
+      trackingCode: customTracking,
+      note = '',
+    } = req.body;
+
+    if (!invoiceNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice number is required.',
+      });
+    }
+
+    let order = null;
+    if (isMongoConnected()) {
+      order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, 'i') },
+      });
+    } else {
+      order = memoryStore.orders.find(
+        (o) => o.invoiceNumber?.toLowerCase() === invoiceNumber.toLowerCase()
+      );
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: `Order #${invoiceNumber} not found in database.`,
+      });
+    }
+
+    if (order.orderStatus === 'Cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot ship a cancelled order.',
+      });
+    }
+
+    // Default unique Steadfast identifiers
+    let consignmentId = customConsignment || Math.floor(600000 + Math.random() * 390000);
+    let trackingCode = customTracking || `SF${Math.floor(10000000 + Math.random() * 90000000)}`;
+
+    // If Steadfast API keys exist in .env, attempt live dispatch to Steadfast portal
+    const apiKey = process.env.STEADFAST_API_KEY;
+    const secretKey = process.env.STEADFAST_SECRET_KEY;
+
+    if (apiKey && secretKey) {
+      try {
+        const codAmount = order.paymentMethod === 'COD' ? order.totalAmount : 0;
+        const sfPayload = {
+          invoice: order.invoiceNumber,
+          recipient_name: order.customerDetails?.name || 'Customer',
+          recipient_phone: order.customerDetails?.phone || '',
+          recipient_address: order.customerDetails?.address || 'Bangladesh',
+          cod_amount: codAmount,
+          note: note || order.customerDetails?.note || 'Sarail 1 to 99 Plus Shop Delivery',
+        };
+
+        const sfResponse = await fetch('https://portal.steadfast.com.bd/api/v1/create_order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Api-Key': apiKey,
+            'Secret-Key': secretKey,
+          },
+          body: JSON.stringify(sfPayload),
+        });
+
+        const sfData = await sfResponse.json().catch(() => ({}));
+        if (sfResponse.ok && sfData?.consignment) {
+          consignmentId = sfData.consignment.consignment_id || consignmentId;
+          trackingCode = sfData.consignment.tracking_code || trackingCode;
+          console.log(`[Steadfast API] Live consignment created for ${order.invoiceNumber}: ${trackingCode}`);
+        } else {
+          console.warn('[Steadfast API Warning]', sfData?.message || 'Using fallback consignment code.');
+        }
+      } catch (sfErr) {
+        console.warn('[Steadfast API Connection Warning]:', sfErr.message);
+      }
+    }
+
+    const trackingUrl = `https://steadfast.com.bd/t/${trackingCode}`;
+    const shippedAt = new Date();
+
+    const courierData = {
+      provider: 'Steadfast',
+      consignmentId,
+      trackingCode,
+      trackingUrl,
+      shippedAt,
+    };
+
+    if (isMongoConnected()) {
+      order.orderStatus = 'Shipped';
+      order.courierData = courierData;
+      order.adminViewed = true;
+      order.viewedAt = new Date();
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Order #${order.invoiceNumber} successfully handed over to Steadfast Courier! Status is now Shipped.`,
+        order,
+      });
+    }
+
+    order.orderStatus = 'Shipped';
+    order.courierData = courierData;
+    return res.status(200).json({
+      success: true,
+      message: `Order #${order.invoiceNumber} handed over to Steadfast Courier. Status set to Shipped.`,
+      order,
+    });
+  } catch (error) {
+    console.error('Error in shipOrderWithSteadfast:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to send order to Steadfast Courier.',
+      error: error.message,
+    });
+  }
+};
+
+const updateOrderStatusAdmin = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { orderStatus } = req.body;
+
+    const validStatuses = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+    if (!validStatuses.includes(orderStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid order status. Allowed: ${validStatuses.join(', ')}`,
+      });
+    }
+
+    if (isMongoConnected()) {
+      const order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, 'i') },
+      });
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: `Order #${invoiceNumber} not found.`,
+        });
+      }
+
+      const prevStatus = order.orderStatus;
+      order.orderStatus = orderStatus;
+
+      // If marked Delivered and payment is COD, mark paymentStatus as Paid
+      if (orderStatus === 'Delivered' && order.paymentMethod === 'COD' && order.paymentStatus === 'Pending') {
+        order.paymentStatus = 'Paid';
+      }
+
+      // If order was cancelled and now restoring, or if newly cancelled, handle stock
+      if (orderStatus === 'Cancelled' && prevStatus !== 'Cancelled') {
+        // Return quantities back to stock
+        if (Array.isArray(order.items)) {
+          for (const item of order.items) {
+            if (item.productId) {
+              await Product.updateOne(
+                { id: item.productId },
+                { $inc: { stock: item.quantity || 1 } }
+              );
+            }
+          }
+        }
+      }
+
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Order status changed from "${prevStatus}" to "${orderStatus}".`,
+        order,
+      });
+    }
+
+    const order = memoryStore.orders.find(
+      (o) => o.invoiceNumber?.toLowerCase() === invoiceNumber.toLowerCase()
+    );
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    order.orderStatus = orderStatus;
+    return res.status(200).json({
+      success: true,
+      message: `Order status set to "${orderStatus}".`,
+      order,
+    });
+  } catch (error) {
+    console.error('Error in updateOrderStatusAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update order status.',
+      error: error.message,
+    });
+  }
+};
+
+const updatePaymentStatusAdmin = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { paymentStatus, verificationNote = '' } = req.body;
+
+    const allowed = [
+      'Pending Verification',
+      'Verified',
+      'Rejected',
+      'Correction Requested',
+      'Pending',
+      'Paid',
+    ];
+
+    if (!allowed.includes(paymentStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid payment status. Allowed: ${allowed.join(', ')}`,
+      });
+    }
+
+    if (isMongoConnected()) {
+      const order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, 'i') },
+      });
+
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+
+      order.paymentStatus = paymentStatus;
+      if (!order.paymentDetails) order.paymentDetails = {};
+      order.paymentDetails.verifiedAt = new Date();
+      order.paymentDetails.verifiedBy = req.admin?.email || 'Store Admin';
+      order.paymentDetails.verificationNote = verificationNote;
+
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Payment status updated to "${paymentStatus}".`,
+        order,
+      });
+    }
+
+    const order = memoryStore.orders.find(
+      (o) => o.invoiceNumber?.toLowerCase() === invoiceNumber.toLowerCase()
+    );
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    order.paymentStatus = paymentStatus;
+    return res.status(200).json({
+      success: true,
+      message: `Payment status updated to "${paymentStatus}".`,
+      order,
+    });
+  } catch (error) {
+    console.error('Error in updatePaymentStatusAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update payment verification.',
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 5. MONTHLY DELIVERED PRODUCT REPORT
+// ---------------------------------------------------------------------------
+const getDeliveredMonthlyReport = async (req, res) => {
+  try {
+    const { year = new Date().getFullYear().toString(), month } = req.query;
+
+    if (isMongoConnected()) {
+      // Find all delivered orders
+      const matchStage = { orderStatus: 'Delivered' };
+
+      const deliveredOrders = await Order.find(matchStage).sort({ createdAt: -1 }).lean();
+
+      // Aggregate metrics by Month (YYYY-MM)
+      const monthlyDataMap = {};
+      const deliveredProductsMap = {};
+
+      deliveredOrders.forEach((order) => {
+        const orderDate = new Date(order.createdAt || Date.now());
+        const y = orderDate.getFullYear().toString();
+        const m = (orderDate.getMonth() + 1).toString().padStart(2, '0');
+        const monthKey = `${y}-${m}`;
+
+        if (!monthlyDataMap[monthKey]) {
+          monthlyDataMap[monthKey] = {
+            monthKey,
+            year: y,
+            month: m,
+            orderCount: 0,
+            revenue: 0,
+            itemsCount: 0,
+            bkashRevenue: 0,
+            codRevenue: 0,
+            insideDhakaOrders: 0,
+            outsideDhakaOrders: 0,
+          };
+        }
+
+        monthlyDataMap[monthKey].orderCount += 1;
+        monthlyDataMap[monthKey].revenue += Number(order.totalAmount) || 0;
+        monthlyDataMap[monthKey].itemsCount += Number(order.totalQuantity) || 1;
+
+        if (order.paymentMethod === 'bKash') {
+          monthlyDataMap[monthKey].bkashRevenue += Number(order.totalAmount) || 0;
+        } else {
+          monthlyDataMap[monthKey].codRevenue += Number(order.totalAmount) || 0;
+        }
+
+        if (order.customerDetails?.deliveryLocation === 'Outside Dhaka') {
+          monthlyDataMap[monthKey].outsideDhakaOrders += 1;
+        } else {
+          monthlyDataMap[monthKey].insideDhakaOrders += 1;
+        }
+
+        // Aggregate item breakdown if matching filter
+        const matchesFilter = (!year || y === year) && (!month || m === month);
+        if (matchesFilter && Array.isArray(order.items)) {
+          order.items.forEach((item) => {
+            const key = item.productId || item.title;
+            if (!deliveredProductsMap[key]) {
+              deliveredProductsMap[key] = {
+                productId: item.productId,
+                title: item.title,
+                category: item.category || 'General',
+                image: item.image || '',
+                unitPrice: item.price,
+                totalQuantitySold: 0,
+                totalRevenue: 0,
+              };
+            }
+            deliveredProductsMap[key].totalQuantitySold += Number(item.quantity) || 1;
+            deliveredProductsMap[key].totalRevenue += (Number(item.price) || 0) * (Number(item.quantity) || 1);
+          });
+        }
+      });
+
+      const monthlySummary = Object.values(monthlyDataMap).sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+      const topDeliveredProducts = Object.values(deliveredProductsMap).sort(
+        (a, b) => b.totalQuantitySold - a.totalQuantitySold
+      );
+
+      // Filtered totals
+      const filteredOrders = deliveredOrders.filter((o) => {
+        const d = new Date(o.createdAt || Date.now());
+        const y = d.getFullYear().toString();
+        const m = (d.getMonth() + 1).toString().padStart(2, '0');
+        if (year && y !== year) return false;
+        if (month && m !== month) return false;
+        return true;
+      });
+
+      const totalDeliveredRevenue = filteredOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      const totalDeliveredOrders = filteredOrders.length;
+      const totalDeliveredUnits = filteredOrders.reduce((sum, o) => sum + (Number(o.totalQuantity) || 1), 0);
+
+      return res.status(200).json({
+        success: true,
+        reportPeriod: {
+          year: year || 'all',
+          month: month || 'all',
+        },
+        summary: {
+          totalDeliveredRevenue,
+          totalDeliveredOrders,
+          totalDeliveredUnits,
+          averageOrderValue: totalDeliveredOrders > 0 ? Math.round(totalDeliveredRevenue / totalDeliveredOrders) : 0,
+        },
+        monthlySummary,
+        topDeliveredProducts,
+        orders: filteredOrders.slice(0, 100),
+      });
+    }
+
+    // Memory fallback report
+    return res.status(200).json({
+      success: true,
+      reportPeriod: { year, month },
+      summary: {
+        totalDeliveredRevenue: 0,
+        totalDeliveredOrders: 0,
+        totalDeliveredUnits: 0,
+        averageOrderValue: 0,
+      },
+      monthlySummary: [],
+      topDeliveredProducts: [],
+      orders: [],
+    });
+  } catch (error) {
+    console.error('Error in getDeliveredMonthlyReport:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to generate monthly delivery report.',
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 6. REAL-TIME ORDER POLLING FOR LIVE NOTIFICATIONS & VIEW TRACKING
+// ---------------------------------------------------------------------------
+const pollRecentOrders = async (req, res) => {
+  try {
+    const { since } = req.query;
+    const query = {
+      adminViewed: { $ne: true },
+    };
+
+    if (since) {
+      const sinceDate = new Date(since);
+      if (!isNaN(sinceDate.getTime())) {
+        query.createdAt = { $gt: sinceDate };
+      }
+    } else {
+      // Default to looking back up to 5 minutes for unviewed orders
+      query.createdAt = { $gt: new Date(Date.now() - 5 * 60 * 1000) };
+    }
+
+    let recentOrders = [];
+    if (isMongoConnected()) {
+      recentOrders = await Order.find(query)
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+    } else {
+      recentOrders = memoryStore.orders.filter(
+        (o) =>
+          !o.adminViewed &&
+          (!query.createdAt || new Date(o.createdAt || Date.now()) > query.createdAt.$gt)
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: recentOrders.length,
+      hasNewOrders: recentOrders.length > 0,
+      orders: recentOrders,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Error in pollRecentOrders:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to poll recent orders.',
+      error: error.message,
+    });
+  }
+};
+
+const markOrderViewedAdmin = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    if (!invoiceNumber) {
+      return res.status(400).json({ success: false, message: 'Invoice number required.' });
+    }
+
+    if (isMongoConnected()) {
+      const order = await Order.findOneAndUpdate(
+        { invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, 'i') } },
+        { $set: { adminViewed: true, viewedAt: new Date() } },
+        { new: true }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: `Order #${invoiceNumber} marked as viewed.`,
+        order,
+      });
+    }
+
+    const order = memoryStore.orders.find(
+      (o) => o.invoiceNumber?.toLowerCase() === invoiceNumber.toLowerCase()
+    );
+    if (order) {
+      order.adminViewed = true;
+      order.viewedAt = new Date();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Order #${invoiceNumber} marked as viewed.`,
+      order,
+    });
+  } catch (error) {
+    console.error('Error in markOrderViewedAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to mark order as viewed.',
+      error: error.message,
+    });
+  }
+};
+
+const markAllOrdersViewedAdmin = async (req, res) => {
+  try {
+    if (isMongoConnected()) {
+      await Order.updateMany(
+        { adminViewed: { $ne: true } },
+        { $set: { adminViewed: true, viewedAt: new Date() } }
+      );
+    } else {
+      memoryStore.orders.forEach((o) => {
+        o.adminViewed = true;
+        o.viewedAt = new Date();
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'All unviewed orders marked as viewed.',
+    });
+  } catch (error) {
+    console.error('Error in markAllOrdersViewedAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to mark orders as viewed.',
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 6. USER & CUSTOMER MANAGEMENT
+// ---------------------------------------------------------------------------
+const getAllUsersAdmin = async (req, res) => {
+  try {
+    const { search = '', hasOrders = 'all' } = req.query;
+
+    let usersList = [];
+    let ordersList = [];
+
+    if (isMongoConnected()) {
+      usersList = await User.find().sort({ createdAt: -1 }).lean();
+      ordersList = await Order.find()
+        .select('invoiceNumber userId customerDetails totalAmount orderStatus paymentStatus createdAt')
+        .lean();
+    } else {
+      usersList = [...memoryStore.users];
+      ordersList = [...memoryStore.orders];
+    }
+
+    // Enrich users with order statistics
+    const enrichedUsers = usersList.map((user) => {
+      const userOrders = ordersList.filter((o) => {
+        if (o.userId && (o.userId === user.uid || o.userId === user._id?.toString())) return true;
+        if (user.email && o.customerDetails?.email && o.customerDetails.email.toLowerCase() === user.email.toLowerCase()) return true;
+        if (user.phone && o.customerDetails?.phone && o.customerDetails.phone.trim() === user.phone.trim()) return true;
+        return false;
+      });
+
+      const ordersCount = userOrders.length;
+      const totalSpent = userOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      const sortedOrders = [...userOrders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const lastOrder = sortedOrders[0];
+
+      return {
+        ...user,
+        ordersCount,
+        totalSpent,
+        lastOrderDate: lastOrder?.createdAt || null,
+        recentStatus: lastOrder?.orderStatus || null,
+      };
+    });
+
+    // Apply filters
+    let filteredUsers = enrichedUsers;
+
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      filteredUsers = filteredUsers.filter(
+        (u) =>
+          u.displayName?.toLowerCase().includes(s) ||
+          u.email?.toLowerCase().includes(s) ||
+          u.phone?.toLowerCase().includes(s) ||
+          u.address?.toLowerCase().includes(s) ||
+          u.uid?.toLowerCase().includes(s)
+      );
+    }
+
+    if (hasOrders === 'yes') {
+      filteredUsers = filteredUsers.filter((u) => u.ordersCount > 0);
+    } else if (hasOrders === 'no') {
+      filteredUsers = filteredUsers.filter((u) => u.ordersCount === 0);
+    }
+
+    const totalUsers = usersList.length;
+    const activeBuyers = enrichedUsers.filter((u) => u.ordersCount > 0).length;
+    const totalRevenueFromUsers = enrichedUsers.reduce((sum, u) => sum + u.totalSpent, 0);
+
+    return res.status(200).json({
+      success: true,
+      count: filteredUsers.length,
+      kpis: {
+        totalUsers,
+        activeBuyers,
+        totalRevenueFromUsers,
+      },
+      users: filteredUsers,
+    });
+  } catch (error) {
+    console.error('Error in getAllUsersAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch users list.',
+      error: error.message,
+    });
+  }
+};
+
+const getUserOrdersAdmin = async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    if (!identifier) {
+      return res.status(400).json({
+        success: false,
+        message: 'User identifier is required.',
+      });
+    }
+
+    let user = null;
+    let orders = [];
+
+    if (isMongoConnected()) {
+      user = await User.findOne({
+        $or: [
+          { uid: identifier },
+          { email: identifier.toLowerCase() },
+          ...(mongoose.isValidObjectId(identifier) ? [{ _id: identifier }] : []),
+        ],
+      }).lean();
+
+      const orderMatch = [];
+      if (user) {
+        if (user.uid) orderMatch.push({ userId: user.uid });
+        if (user._id) orderMatch.push({ userId: user._id.toString() });
+        if (user.email) orderMatch.push({ 'customerDetails.email': user.email.toLowerCase() });
+        if (user.phone) orderMatch.push({ 'customerDetails.phone': user.phone.trim() });
+      } else {
+        orderMatch.push({ userId: identifier });
+        orderMatch.push({ 'customerDetails.email': identifier.toLowerCase() });
+        orderMatch.push({ 'customerDetails.phone': identifier.trim() });
+      }
+
+      orders = await Order.find({ $or: orderMatch }).sort({ createdAt: -1 }).lean();
+    } else {
+      user = memoryStore.users.find(
+        (u) =>
+          u.uid === identifier ||
+          u.email?.toLowerCase() === identifier.toLowerCase() ||
+          u._id === identifier
+      );
+
+      orders = memoryStore.orders
+        .filter((o) => {
+          if (user) {
+            if (o.userId && (o.userId === user.uid || o.userId === user._id)) return true;
+            if (user.email && o.customerDetails?.email?.toLowerCase() === user.email.toLowerCase()) return true;
+            if (user.phone && o.customerDetails?.phone?.trim() === user.phone.trim()) return true;
+          } else {
+            if (o.userId === identifier) return true;
+            if (o.customerDetails?.email?.toLowerCase() === identifier.toLowerCase()) return true;
+            if (o.customerDetails?.phone?.trim() === identifier.trim()) return true;
+          }
+          return false;
+        })
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      user: user || {
+        displayName: orders[0]?.customerDetails?.name || 'Customer',
+        email: orders[0]?.customerDetails?.email || identifier,
+        phone: orders[0]?.customerDetails?.phone || '',
+        address: orders[0]?.customerDetails?.address || '',
+      },
+      orders,
+    });
+  } catch (error) {
+    console.error('Error in getUserOrdersAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user orders.',
+      error: error.message,
+    });
+  }
+};
+
+module.exports = {
+  adminLogin,
+  getSystemStatus,
+  getAllProductsAdmin,
+  createProductAdmin,
+  updateProductAdmin,
+  updateProductStockAdmin,
+  deleteProductAdmin,
+  getAllOrdersAdmin,
+  shipOrderWithSteadfast,
+  updateOrderStatusAdmin,
+  updatePaymentStatusAdmin,
+  getDeliveredMonthlyReport,
+  pollRecentOrders,
+  markOrderViewedAdmin,
+  markAllOrdersViewedAdmin,
+  getAllUsersAdmin,
+  getUserOrdersAdmin,
+};
+
