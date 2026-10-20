@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const User = require('../models/User');
+const PreOrder = require('../models/PreOrder');
 const { isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 const { signAdminToken } = require('../middleware/authMiddleware');
@@ -275,6 +276,7 @@ const createProductAdmin = async (req, res) => {
       category,
       stock = 50,
       thumbnail,
+      videoUrl = '',
       description = '',
       warranty = '12 Months Replacement',
       sku = '',
@@ -338,6 +340,7 @@ const createProductAdmin = async (req, res) => {
       category: category.trim(),
       stock: Math.max(0, Number(stock) || 0),
       thumbnail: resolvedThumbnail,
+      videoUrl: (videoUrl || '').trim(),
       description: description.trim(),
       warranty: warranty.trim(),
       sku: sku.trim() || `SAR-${nextId}`,
@@ -378,6 +381,18 @@ const createProductAdmin = async (req, res) => {
   }
 };
 
+const getProductLookupQuery = (id) => {
+  const numericId = Number(id);
+  const conditions = [];
+  if (!Number.isNaN(numericId)) {
+    conditions.push({ id: numericId });
+  }
+  if (mongoose.isValidObjectId(id)) {
+    conditions.push({ _id: id });
+  }
+  return conditions.length > 1 ? { $or: conditions } : conditions[0] || { id: -1 };
+};
+
 const updateProductAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -392,6 +407,7 @@ const updateProductAdmin = async (req, res) => {
     if (updateFields.stock !== undefined) updateFields.stock = Math.max(0, Number(updateFields.stock));
     if (updateFields.rating !== undefined) updateFields.rating = Math.min(5, Math.max(0, Number(updateFields.rating) || 0));
     if (updateFields.reviews !== undefined) updateFields.reviews = Math.max(0, Number(updateFields.reviews) || 0);
+    if (updateFields.videoUrl !== undefined) updateFields.videoUrl = String(updateFields.videoUrl || '').trim();
 
     // Sync thumbnail and variants if provided
     if (Array.isArray(updateFields.variants) && updateFields.variants.length > 0) {
@@ -423,9 +439,11 @@ const updateProductAdmin = async (req, res) => {
       }
     }
 
+    const query = getProductLookupQuery(id);
+
     if (isMongoConnected()) {
       const updated = await Product.findOneAndUpdate(
-        { $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }] },
+        query,
         { $set: updateFields },
         { new: true }
       );
@@ -437,6 +455,14 @@ const updateProductAdmin = async (req, res) => {
         });
       }
 
+      // Sync memoryStore if present
+      const memIdx = memoryStore.products.findIndex(
+        (p) => (!Number.isNaN(numericId) && p.id === numericId) || p.id?.toString() === String(id) || p._id === String(id)
+      );
+      if (memIdx !== -1) {
+        memoryStore.products[memIdx] = { ...memoryStore.products[memIdx], ...updateFields };
+      }
+
       return res.status(200).json({
         success: true,
         message: `Product #${updated.id} updated successfully.`,
@@ -444,7 +470,9 @@ const updateProductAdmin = async (req, res) => {
       });
     }
 
-    const idx = memoryStore.products.findIndex((p) => p.id === numericId || p.id?.toString() === id);
+    const idx = memoryStore.products.findIndex(
+      (p) => (!Number.isNaN(numericId) && p.id === numericId) || p.id?.toString() === String(id) || p._id === String(id)
+    );
     if (idx === -1) {
       return res.status(404).json({
         success: false,
@@ -455,7 +483,7 @@ const updateProductAdmin = async (req, res) => {
     memoryStore.products[idx] = { ...memoryStore.products[idx], ...updateFields };
     return res.status(200).json({
       success: true,
-      message: `Product #${numericId} updated successfully.`,
+      message: `Product #${numericId || id} updated successfully.`,
       product: memoryStore.products[idx],
     });
   } catch (error) {
@@ -481,14 +509,14 @@ const updateProductStockAdmin = async (req, res) => {
       });
     }
 
+    const query = getProductLookupQuery(id);
+
     if (isMongoConnected()) {
       let updateOp = {};
       if (stock !== undefined) {
         updateOp = { $set: { stock: Math.max(0, Number(stock)) } };
       } else {
-        const currentProd = await Product.findOne({
-          $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }],
-        });
+        const currentProd = await Product.findOne(query);
         if (!currentProd) {
           return res.status(404).json({ success: false, message: 'Product not found.' });
         }
@@ -496,11 +524,18 @@ const updateProductStockAdmin = async (req, res) => {
         updateOp = { $set: { stock: newStock } };
       }
 
-      const updated = await Product.findOneAndUpdate(
-        { $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }] },
-        updateOp,
-        { new: true }
+      const updated = await Product.findOneAndUpdate(query, updateOp, { new: true });
+      if (!updated) {
+        return res.status(404).json({ success: false, message: 'Product not found.' });
+      }
+
+      // Sync memoryStore
+      const memIdx = memoryStore.products.findIndex(
+        (p) => (!Number.isNaN(numericId) && p.id === numericId) || p.id?.toString() === String(id) || p._id === String(id)
       );
+      if (memIdx !== -1) {
+        memoryStore.products[memIdx].stock = updated.stock;
+      }
 
       return res.status(200).json({
         success: true,
@@ -509,7 +544,9 @@ const updateProductStockAdmin = async (req, res) => {
       });
     }
 
-    const prod = memoryStore.products.find((p) => p.id === numericId || p.id?.toString() === id);
+    const prod = memoryStore.products.find(
+      (p) => (!Number.isNaN(numericId) && p.id === numericId) || p.id?.toString() === String(id) || p._id === String(id)
+    );
     if (!prod) {
       return res.status(404).json({ success: false, message: 'Product not found.' });
     }
@@ -540,33 +577,40 @@ const deleteProductAdmin = async (req, res) => {
     const { id } = req.params;
     const numericId = Number(id);
 
-    if (isMongoConnected()) {
-      const deleted = await Product.findOneAndDelete({
-        $or: [{ id: numericId }, { _id: mongoose.isValidObjectId(id) ? id : null }],
-      });
+    const query = getProductLookupQuery(id);
+    const memIdx = memoryStore.products.findIndex(
+      (p) => (!Number.isNaN(numericId) && p.id === numericId) || p.id?.toString() === String(id) || p._id === String(id)
+    );
+    let memRemoved = null;
+    if (memIdx !== -1) {
+      memRemoved = memoryStore.products.splice(memIdx, 1)[0];
+    }
 
-      if (!deleted) {
+    if (isMongoConnected()) {
+      const deleted = await Product.findOneAndDelete(query);
+
+      if (!deleted && !memRemoved) {
         return res.status(404).json({
           success: false,
           message: `Product #${id} not found in database.`,
         });
       }
 
+      const prodInfo = deleted || memRemoved;
       return res.status(200).json({
         success: true,
-        message: `Product #${deleted.id} (${deleted.name}) deleted permanently from MongoDB.`,
+        message: `Product #${prodInfo.id} (${prodInfo.name}) deleted permanently from MongoDB.`,
       });
     }
 
-    const idx = memoryStore.products.findIndex((p) => p.id === numericId || p.id?.toString() === id);
-    if (idx === -1) {
-      return res.status(404).json({ success: false, message: 'Product not found.' });
+    if (memRemoved) {
+      return res.status(200).json({
+        success: true,
+        message: `Product #${memRemoved.id} deleted permanently.`,
+      });
     }
-    const removed = memoryStore.products.splice(idx, 1)[0];
-    return res.status(200).json({
-      success: true,
-      message: `Product #${removed.id} deleted permanently.`,
-    });
+
+    return res.status(404).json({ success: false, message: 'Product not found.' });
   } catch (error) {
     console.error('Error in deleteProductAdmin:', error);
     return res.status(500).json({
@@ -1092,33 +1136,39 @@ const pollRecentOrders = async (req, res) => {
       adminViewed: { $ne: true },
     };
 
-    if (since) {
+    if (since && since !== 'null' && since !== 'undefined' && String(since).trim() !== '') {
       const sinceDate = new Date(since);
       if (!isNaN(sinceDate.getTime())) {
-        query.createdAt = { $gt: sinceDate };
+        // Buffer by 60 seconds to prevent clock drift between client machine and cloud server from dropping orders
+        query.createdAt = { $gt: new Date(sinceDate.getTime() - 60 * 1000) };
       }
     } else {
-      // Default to looking back up to 5 minutes for unviewed orders
-      query.createdAt = { $gt: new Date(Date.now() - 5 * 60 * 1000) };
+      // Look back up to 48 hours for unviewed orders
+      query.createdAt = { $gt: new Date(Date.now() - 48 * 60 * 60 * 1000) };
     }
 
     let recentOrders = [];
+    let unviewedCount = 0;
+
     if (isMongoConnected()) {
       recentOrders = await Order.find(query)
         .sort({ createdAt: -1 })
         .limit(20)
         .lean();
+      unviewedCount = await Order.countDocuments({ adminViewed: { $ne: true } }).catch(() => recentOrders.length);
     } else {
       recentOrders = memoryStore.orders.filter(
         (o) =>
           !o.adminViewed &&
           (!query.createdAt || new Date(o.createdAt || Date.now()) > query.createdAt.$gt)
       );
+      unviewedCount = memoryStore.orders.filter((o) => !o.adminViewed).length;
     }
 
     return res.status(200).json({
       success: true,
       count: recentOrders.length,
+      unviewedCount,
       hasNewOrders: recentOrders.length > 0,
       orders: recentOrders,
       serverTime: new Date().toISOString(),
@@ -1200,6 +1250,65 @@ const markAllOrdersViewedAdmin = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to mark orders as viewed.',
+      error: error.message,
+    });
+  }
+};
+
+const deleteOrderAdmin = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    if (!invoiceNumber) {
+      return res.status(400).json({ success: false, message: 'Invoice number is required.' });
+    }
+
+    const cleanInvoice = invoiceNumber.trim();
+
+    // Check & remove from memoryStore as well
+    const memIdx = memoryStore.orders.findIndex(
+      (o) => o.invoiceNumber?.toLowerCase() === cleanInvoice.toLowerCase()
+    );
+    let memRemoved = null;
+    if (memIdx !== -1) {
+      memRemoved = memoryStore.orders.splice(memIdx, 1)[0];
+    }
+
+    if (isMongoConnected()) {
+      const deletedOrder = await Order.findOneAndDelete({
+        invoiceNumber: { $regex: new RegExp(`^${cleanInvoice}$`, 'i') },
+      });
+
+      if (!deletedOrder && !memRemoved) {
+        return res.status(404).json({
+          success: false,
+          message: `Order #${cleanInvoice} not found.`,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Order #${cleanInvoice} deleted permanently.`,
+        deletedOrder: deletedOrder || memRemoved,
+      });
+    }
+
+    if (memRemoved) {
+      return res.status(200).json({
+        success: true,
+        message: `Order #${cleanInvoice} deleted permanently.`,
+        deletedOrder: memRemoved,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: `Order #${cleanInvoice} not found.`,
+    });
+  } catch (error) {
+    console.error('Error in deleteOrderAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete order.',
       error: error.message,
     });
   }
@@ -1373,6 +1482,80 @@ const getUserOrdersAdmin = async (req, res) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// 7. PRE-ORDER MANAGEMENT (ADMIN)
+// ---------------------------------------------------------------------------
+const getAllPreOrdersAdmin = async (req, res) => {
+  try {
+    if (isMongoConnected()) {
+      const preOrders = await PreOrder.find().sort({ createdAt: -1 }).lean();
+      return res.status(200).json({
+        success: true,
+        count: preOrders.length,
+        preOrders,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: memoryStore.preOrders.length,
+      preOrders: memoryStore.preOrders,
+    });
+  } catch (error) {
+    console.error('Error in getAllPreOrdersAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch pre-orders.',
+      error: error.message,
+    });
+  }
+};
+
+const updatePreOrderStatusAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const validStatuses = ['Pending', 'Contacted', 'Fulfilled', 'Cancelled'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Allowed: ${validStatuses.join(', ')}`,
+      });
+    }
+
+    if (isMongoConnected()) {
+      const updated = await PreOrder.findByIdAndUpdate(id, { status }, { new: true });
+      if (!updated) {
+        return res.status(404).json({ success: false, message: 'Pre-order not found.' });
+      }
+      return res.status(200).json({
+        success: true,
+        message: `Pre-order status updated to ${status}.`,
+        preOrder: updated,
+      });
+    }
+
+    const po = memoryStore.preOrders.find((p) => p._id === id);
+    if (!po) {
+      return res.status(404).json({ success: false, message: 'Pre-order not found.' });
+    }
+    po.status = status;
+    return res.status(200).json({
+      success: true,
+      message: `Pre-order status updated to ${status}.`,
+      preOrder: po,
+    });
+  } catch (error) {
+    console.error('Error in updatePreOrderStatusAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update pre-order status.',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   adminLogin,
   getSystemStatus,
@@ -1385,11 +1568,14 @@ module.exports = {
   shipOrderWithSteadfast,
   updateOrderStatusAdmin,
   updatePaymentStatusAdmin,
+  deleteOrderAdmin,
   getDeliveredMonthlyReport,
   pollRecentOrders,
   markOrderViewedAdmin,
   markAllOrdersViewedAdmin,
   getAllUsersAdmin,
   getUserOrdersAdmin,
+  getAllPreOrdersAdmin,
+  updatePreOrderStatusAdmin,
 };
 
