@@ -39,6 +39,7 @@ const initialProducts = [
     tag: 'Daily Essential',
     stock: 50,
     thumbnail: 'https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png',
+    videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     description:
       'সহজেই কিচেনের যেকোনো পানির কলে সেট করা যায়। পানি পরিষ্কার ও ব্যাকটেরিয়ামুক্ত রাখতে কার্যকর এবং পানির অপচয় রোধ করে।',
     variants: [

@@ -19,6 +19,7 @@ router.post('/:invoiceNumber/cancel', cancelOrder);
 router.patch('/:invoiceNumber/payment-status', updatePaymentStatus);
 router.put('/:invoiceNumber/payment-status', updatePaymentStatus);
 router.post('/pre-order', createPreOrder);
+router.post('/pre-orders', createPreOrder);
 
 module.exports = router;
 

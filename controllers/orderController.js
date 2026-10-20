@@ -43,7 +43,7 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // 2. Extract Raw Ordered Items (Zero-Trust: ignore client price/subtotal)
+    // 2. Extract Raw Ordered Items
     const rawItems = Array.isArray(items) && items.length > 0 ? items : orderItems;
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return res.status(400).json({
@@ -52,16 +52,104 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // 3. Batch Query MongoDB for all matching product IDs
+    // 3. Validate Payment Method & bKash Anti-Replay TrxID
+    const isBkash = paymentMethod === 'bKash';
+    const submittedTrx = (paymentDetails.trxId || trxId || '').trim().toUpperCase();
+
+    let paymentMode = 'full';
+    if (isBkash) {
+      paymentMode = (paymentDetails.mode || 'full').toLowerCase();
+      if (!['full', 'delivery'].includes(paymentMode)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid bKash payment mode. Allowed modes: "full" or "delivery".',
+        });
+      }
+
+      if (!submittedTrx) {
+        return res.status(400).json({
+          success: false,
+          message: 'Transaction ID (TrxID) is required for bKash payments.',
+        });
+      }
+      if (submittedTrx.length < 6) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid bKash Transaction ID.',
+        });
+      }
+
+      // Check duplicate TrxID to prevent duplicate reuse
+      if (isMongoConnected()) {
+        const existingTrx = await Order.findOne({
+          'paymentDetails.trxId': submittedTrx,
+        }).lean();
+        if (existingTrx) {
+          return res.status(400).json({
+            success: false,
+            message: 'This Transaction ID has already been submitted for another order. Please check and provide the correct TrxID.',
+          });
+        }
+      } else {
+        const memTrx = memoryStore.orders.find(
+          (o) => o.paymentDetails?.trxId === submittedTrx
+        );
+        if (memTrx) {
+          return res.status(400).json({
+            success: false,
+            message: 'This Transaction ID has already been submitted for another order. Please check and provide the correct TrxID.',
+          });
+        }
+      }
+    }
+
+    // 4. Delivery Zone Fee Validation
+    let validatedDeliveryFee = 60;
+    if (req.body.deliveryFee !== undefined && !isNaN(Number(req.body.deliveryFee))) {
+      validatedDeliveryFee = Math.max(0, Number(req.body.deliveryFee));
+    } else {
+      const rawDeliveryZone = (customerDetails.deliveryLocation || '').trim();
+      const isOutsideDhaka = rawDeliveryZone.toLowerCase().includes('outside');
+      validatedDeliveryFee = isOutsideDhaka ? 120 : 60;
+    }
+
+    if (isBkash && paymentMode === 'delivery' && validatedDeliveryFee <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Delivery charge only mode requires a delivery fee greater than zero.',
+      });
+    }
+
+    // Helper to robustly extract product identifier across sanitized $oid/_oid/string/number formats
+    const extractProductId = (it) => {
+      if (!it) return null;
+      if (it.productId !== undefined && it.productId !== null && it.productId !== '') {
+        return it.productId;
+      }
+      if (it.product) {
+        if (typeof it.product === 'object') {
+          return it.product.$oid || it.product._oid || it.product.id || it.product._id || null;
+        }
+        return it.product;
+      }
+      if (it.id !== undefined && it.id !== null && it.id !== '') {
+        return it.id;
+      }
+      if (it._id) {
+        if (typeof it._id === 'object') {
+          return it._id.$oid || it._id._oid || it._id.id || null;
+        }
+        return it._id;
+      }
+      return null;
+    };
+
+    // 5. Query Products from DB / memoryStore
     const numericIds = [];
     const objectIds = [];
 
     rawItems.forEach((it) => {
-      const rawPid =
-        it.productId !== undefined && it.productId !== null && it.productId !== ''
-          ? it.productId
-          : it.product?.$oid || it.product || it.id || it._id;
-
+      const rawPid = extractProductId(it);
       if (rawPid !== undefined && rawPid !== null && rawPid !== '') {
         const num = Number(rawPid);
         if (!isNaN(num)) {
@@ -77,82 +165,81 @@ const createOrder = async (req, res) => {
     if (numericIds.length > 0) orConditions.push({ id: { $in: numericIds } });
     if (objectIds.length > 0) orConditions.push({ _id: { $in: objectIds } });
 
-    if (orConditions.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No valid product identifiers provided in order items.',
-      });
-    }
-
     let dbProducts = [];
-    if (isMongoConnected()) {
-      dbProducts = await Product.find({ $or: orConditions }).lean();
-    } else {
-      dbProducts = memoryStore.products.filter(
-        (p) =>
-          numericIds.includes(p.id) ||
-          objectIds.some((oid) => oid.toString() === p._id?.toString())
-      );
+    if (orConditions.length > 0) {
+      if (isMongoConnected()) {
+        dbProducts = await Product.find({ $or: orConditions }).lean();
+      } else {
+        dbProducts = memoryStore.products.filter(
+          (p) =>
+            numericIds.includes(p.id) ||
+            objectIds.some((oid) => oid.toString() === p._id?.toString())
+        );
+      }
     }
 
-    // 4. Calculate Line Totals, Subtotal & Total Quantity Using Verified DB Prices Only
+    // 6. Build Verified Line Items & Calculate Totals
     const verifiedItems = [];
     let calculatedSubtotal = 0;
     let calculatedTotalQty = 0;
 
     for (const rawItem of rawItems) {
-      const rawPid =
-        rawItem.productId !== undefined && rawItem.productId !== null && rawItem.productId !== ''
-          ? rawItem.productId
-          : rawItem.product?.$oid || rawItem.product || rawItem.id || rawItem._id;
+      const rawPid = extractProductId(rawItem);
 
-      const matchedProduct = dbProducts.find((p) => {
-        if (rawPid !== undefined && rawPid !== null) {
+      let matchedProduct = null;
+      if (rawPid !== undefined && rawPid !== null) {
+        matchedProduct = dbProducts.find((p) => {
           if (Number(rawPid) === p.id) return true;
           if (p._id && p._id.toString() === String(rawPid)) return true;
-        }
-        return false;
-      });
-
-      if (!matchedProduct) {
-        return res.status(400).json({
-          success: false,
-          message: `Product #${rawPid} was not found in the catalog or has been discontinued.`,
+          return false;
         });
       }
 
       // Quantity must be a positive integer
       const quantity = Math.max(1, parseInt(rawItem.quantity, 10) || 1);
-      const verifiedUnitPrice = Number(matchedProduct.price);
-      if (isNaN(verifiedUnitPrice) || verifiedUnitPrice < 0) {
-        return res.status(500).json({
+
+      // Verified unit price: use DB price if product matched; otherwise fallback to item price
+      let unitPrice = 0;
+      if (matchedProduct) {
+        unitPrice = Number(matchedProduct.price);
+      } else if (rawItem.price !== undefined && !isNaN(Number(rawItem.price))) {
+        unitPrice = Math.max(0, Number(rawItem.price));
+      } else {
+        return res.status(400).json({
           success: false,
-          message: `Internal price configuration error for product #${matchedProduct.id}.`,
+          message: `Product price missing or invalid for item: "${rawItem.title || rawItem.name || 'Unknown'}".`,
         });
       }
 
-      const lineSubtotal = verifiedUnitPrice * quantity;
+      const lineSubtotal = unitPrice * quantity;
       calculatedSubtotal += lineSubtotal;
       calculatedTotalQty += quantity;
 
+      const title = matchedProduct?.name || rawItem.title || rawItem.name || 'Product';
       const color =
         rawItem.color ||
         rawItem.selectedVariant?.colorName ||
-        matchedProduct.variants?.[0]?.colorName ||
+        matchedProduct?.variants?.[0]?.colorName ||
         'Standard';
 
       const colorCode =
         rawItem.colorCode ||
         rawItem.selectedVariant?.colorCode ||
-        matchedProduct.variants?.[0]?.colorCode ||
+        matchedProduct?.variants?.[0]?.colorCode ||
+        '';
+
+      const image =
+        rawItem.image ||
+        matchedProduct?.variants?.[0]?.images?.[0] ||
+        matchedProduct?.thumbnail ||
         '';
 
       verifiedItems.push({
-        product: matchedProduct._id || matchedProduct.id,
-        productObjectId: matchedProduct._id,
-        productId: matchedProduct.id,
-        title: matchedProduct.name,
-        price: verifiedUnitPrice, // Server verified price!
+        product: matchedProduct?._id || matchedProduct?.id || rawPid || undefined,
+        productObjectId: matchedProduct?._id || (mongoose.isValidObjectId(String(rawPid)) ? new mongoose.Types.ObjectId(String(rawPid)) : undefined),
+        productId: matchedProduct?.id || (Number(rawPid) ? Number(rawPid) : undefined),
+        title,
+        price: unitPrice,
         quantity,
         color,
         colorCode,
@@ -160,71 +247,35 @@ const createOrder = async (req, res) => {
           colorName: color,
           colorCode,
         },
-        image:
-          rawItem.image ||
-          matchedProduct.variants?.[0]?.images?.[0] ||
-          matchedProduct.thumbnail ||
-          '',
-        category: matchedProduct.category || 'General',
+        image,
+        category: matchedProduct?.category || rawItem.category || 'General',
         subtotal: lineSubtotal,
       });
     }
 
-    // 5. Server-Side Delivery Fee Validation
-    const rawDeliveryZone = (customerDetails.deliveryLocation || '').trim();
-    const isOutsideDhaka = rawDeliveryZone.toLowerCase().includes('outside');
-    const verifiedDeliveryLocation = isOutsideDhaka ? 'Outside Dhaka' : 'Inside Dhaka';
-    const verifiedDeliveryFee = SERVER_DELIVERY_FEES[verifiedDeliveryLocation] || 60;
-    const verifiedTotalAmount = calculatedSubtotal + verifiedDeliveryFee;
+    const verifiedTotalAmount = calculatedSubtotal + validatedDeliveryFee;
 
-    // 6. bKash Anti-Replay TrxID Verification
-    const isBkash = paymentMethod === 'bKash';
-    const submittedTrx = (paymentDetails.trxId || trxId || '').trim().toUpperCase();
+    // Expected prepaid amount:
+    // - COD: 0 (pays on delivery)
+    // - bKash Full: verifiedTotalAmount (pays full invoice in advance)
+    // - bKash Delivery: validatedDeliveryFee (pays only delivery in advance, itemsSubtotal on delivery)
+    const expectedPrepaidAmount = isBkash
+      ? paymentMode === 'delivery'
+        ? validatedDeliveryFee
+        : verifiedTotalAmount
+      : 0;
 
-    // Validate payment mode on server
-    let paymentMode = 'full';
-    if (isBkash) {
-      if (!submittedTrx) {
-        return res.status(400).json({
-          success: false,
-          message: 'A valid bKash Transaction ID (minimum 6 characters) is required.',
-        });
-      }
-
-      if (isMongoConnected()) {
-        const existingTrx = await Order.findOne({
-          'paymentDetails.trxId': submittedTrx,
-        }).lean();
-
-        if (existingTrx) {
-          return res.status(400).json({
-            success: false,
-            message: 'This Transaction ID has already been submitted for another order. Replay of TrxID is blocked.',
-          });
-        }
-      } else {
-        const memTrx = memoryStore.orders.find(
-          (o) => o.paymentDetails?.trxId === submittedTrx
-        );
-        if (memTrx) {
-          return res.status(400).json({
-            success: false,
-            message: 'This Transaction ID has already been submitted for another order.',
-          });
-        }
-      }
-    }
-
-    // 7. True Atomic Stock Decrement & Concurrency Safety
-    // Stock never drops below zero ($gte: item.quantity); rollback on any item failure
-    const decrementedRecords = [];
-    let stockErrorItem = null;
-
+    // 7. Atomic Stock Decrement for Catalog Products (concurrency safe)
     if (isMongoConnected()) {
+      const decrementedRecords = [];
+      let stockErrorItem = null;
+
       for (const item of verifiedItems) {
+        if (!item.productId && !item.productObjectId) continue;
+
         const filter = {
           $or: [
-            { id: item.productId },
+            ...(item.productId ? [{ id: item.productId }] : []),
             ...(item.productObjectId ? [{ _id: item.productObjectId }] : []),
           ],
           stock: { $gte: item.quantity },
@@ -237,17 +288,26 @@ const createOrder = async (req, res) => {
         );
 
         if (!updatedProduct) {
-          stockErrorItem = item.title;
-          break;
-        }
+          // If product exists in catalog but insufficient stock
+          const exists = await Product.findOne({
+            $or: [
+              ...(item.productId ? [{ id: item.productId }] : []),
+              ...(item.productObjectId ? [{ _id: item.productObjectId }] : []),
+            ],
+          }).lean();
 
-        decrementedRecords.push({
-          query: { _id: updatedProduct._id },
-          quantity: item.quantity,
-        });
+          if (exists) {
+            stockErrorItem = item.title;
+            break;
+          }
+        } else {
+          decrementedRecords.push({
+            query: { _id: updatedProduct._id },
+            quantity: item.quantity,
+          });
+        }
       }
 
-      // If any item failed atomic decrement: rollback all previously decremented items!
       if (stockErrorItem) {
         for (const rec of decrementedRecords) {
           await Product.updateOne(rec.query, { $inc: { stock: rec.quantity } }).catch(() => {});
@@ -255,27 +315,6 @@ const createOrder = async (req, res) => {
         return res.status(409).json({
           success: false,
           message: `Insufficient stock for item: "${stockErrorItem}". Please reduce quantity or remove it from your cart.`,
-        });
-      }
-    } else {
-      for (const item of verifiedItems) {
-        const memProd = memoryStore.products.find((p) => p.id === item.productId);
-        if (!memProd || (memProd.stock || 0) < item.quantity) {
-          stockErrorItem = item.title;
-          break;
-        }
-        memProd.stock -= item.quantity;
-        decrementedRecords.push({ id: memProd.id, quantity: item.quantity });
-      }
-
-      if (stockErrorItem) {
-        for (const rec of decrementedRecords) {
-          const memProd = memoryStore.products.find((p) => p.id === rec.id);
-          if (memProd) memProd.stock += rec.quantity;
-        }
-        return res.status(409).json({
-          success: false,
-          message: `Insufficient stock for item: "${stockErrorItem}".`,
         });
       }
     }
@@ -293,15 +332,6 @@ const createOrder = async (req, res) => {
       courierData?.trackingCode ||
       `SF${Math.floor(10000000 + Math.random() * 90000000)}`;
 
-    const computedSubtotal =
-      itemsSubtotal ||
-      items.reduce(
-        (acc, it) => acc + (Number(it.price) || 0) * (Number(it.quantity) || 1),
-        0
-      );
-
-    const computedTotal = totalAmount || computedSubtotal + Number(deliveryFee);
-
     const initialPaymentStatus = isBkash ? 'Pending Verification' : 'Pending';
 
     // 9. Build Verified Order Payload
@@ -314,30 +344,27 @@ const createOrder = async (req, res) => {
         phone: customerDetails.phone,
         address: customerDetails.address,
         note: customerDetails.note || '',
-        deliveryLocation: customerDetails.deliveryLocation || 'Inside Dhaka',
+        deliveryLocation:
+          customerDetails.deliveryLocation ||
+          (validatedDeliveryFee === 120 ? 'Outside Dhaka' : 'Inside Dhaka'),
       },
-      items: items.map((item) => ({
-        product: item.product,
-        productId: Number(item.productId) || undefined,
-        title: item.title || item.name,
+      items: verifiedItems.map((item) => ({
+        product: item.productObjectId || item.product,
+        productId: item.productId,
+        title: item.title,
         price: Number(item.price) || 0,
         quantity: Number(item.quantity) || 1,
-        color: item.color || item.selectedVariant?.colorName || 'Standard',
-        colorCode: item.colorCode || item.selectedVariant?.colorCode || '',
-        selectedVariant: {
-          colorName: item.color || item.selectedVariant?.colorName || 'Standard',
-          colorCode: item.colorCode || item.selectedVariant?.colorCode || '',
-        },
-        image: item.image || '',
-        category: item.category || 'General',
-        subtotal: (Number(item.price) || 0) * (Number(item.quantity) || 1),
+        color: item.color,
+        colorCode: item.colorCode,
+        selectedVariant: item.selectedVariant,
+        image: item.image,
+        category: item.category,
+        subtotal: item.subtotal,
       })),
-      deliveryFee: Number(deliveryFee),
-      itemsSubtotal: computedSubtotal,
-      totalAmount: computedTotal,
-      totalQuantity:
-        totalQuantity ||
-        items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0),
+      deliveryFee: Number(validatedDeliveryFee),
+      itemsSubtotal: calculatedSubtotal,
+      totalAmount: verifiedTotalAmount,
+      totalQuantity: calculatedTotalQty,
       paymentMethod: isBkash ? 'bKash' : 'COD',
       paymentStatus: initialPaymentStatus,
       paymentDetails: {
@@ -345,7 +372,7 @@ const createOrder = async (req, res) => {
         bKashNumber: '01998789157',
         trxId: isBkash ? submittedTrx : '',
         senderPhone: paymentDetails.senderPhone || '',
-        expectedAmount: computedTotal,
+        expectedAmount: expectedPrepaidAmount,
         submittedAt: new Date(),
         verifiedAt: null,
         verifiedBy: '',
@@ -469,11 +496,12 @@ const getUserOrders = async (req, res) => {
   try {
     const email = (req.params.email || req.query.email || '').trim().toLowerCase();
     const userId = (req.query.userId || '').trim();
+    const phone = (req.query.phone || '').trim();
 
-    if (!email && !userId) {
+    if (!email && !userId && !phone) {
       return res.status(400).json({
         success: false,
-        message: 'User email or userId is required to fetch order history.',
+        message: 'User email, phone, or userId is required to fetch order history.',
       });
     }
 
@@ -481,11 +509,16 @@ const getUserOrders = async (req, res) => {
       const orConditions = [];
       if (email) {
         orConditions.push({
-          'customerDetails.email': { $regex: new RegExp(`^${email}$`, 'i') },
+          'customerDetails.email': { $regex: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
         });
       }
       if (userId) {
         orConditions.push({ userId });
+      }
+      if (phone) {
+        orConditions.push({
+          'customerDetails.phone': { $regex: new RegExp(phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+        });
       }
 
       const orders = await Order.find({ $or: orConditions })
@@ -503,7 +536,8 @@ const getUserOrders = async (req, res) => {
       .filter(
         (o) =>
           (email && o.customerDetails?.email?.toLowerCase() === email) ||
-          (userId && o.userId === userId)
+          (userId && o.userId === userId) ||
+          (phone && o.customerDetails?.phone?.includes(phone))
       )
       .sort(
         (a, b) =>

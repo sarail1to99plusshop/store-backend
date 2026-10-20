@@ -82,6 +82,10 @@ const getProducts = async (req, res) => {
           collections: normalizeCollections(p),
           rating: stats.rating,
           reviews: stats.reviews,
+          variants:
+            Array.isArray(p.variants) && p.variants.length > 0
+              ? p.variants
+              : [{ colorName: 'Standard', colorCode: '#000000', images: [p.thumbnail].filter(Boolean) }],
         };
       });
     } else {
@@ -95,6 +99,10 @@ const getProducts = async (req, res) => {
           collections: normalizeCollections(p),
           rating: averageRating,
           reviews: totalReviews,
+          variants:
+            Array.isArray(p.variants) && p.variants.length > 0
+              ? p.variants
+              : [{ colorName: 'Standard', colorCode: '#000000', images: [p.thumbnail].filter(Boolean) }],
         };
       });
     }
@@ -230,6 +238,9 @@ const getProductById = async (req, res) => {
       const { averageRating, totalReviews } = computeRatingStats(prodReviews);
       product.rating = averageRating;
       product.reviews = totalReviews;
+      if (!Array.isArray(product.variants) || product.variants.length === 0) {
+        product.variants = [{ colorName: 'Standard', colorCode: '#000000', images: [product.thumbnail].filter(Boolean) }];
+      }
 
       return res.status(200).json({
         success: true,
@@ -262,6 +273,10 @@ const getProductById = async (req, res) => {
         ...product,
         rating: averageRating,
         reviews: totalReviews,
+        variants:
+          Array.isArray(product.variants) && product.variants.length > 0
+            ? product.variants
+            : [{ colorName: 'Standard', colorCode: '#000000', images: [product.thumbnail].filter(Boolean) }],
       },
     });
   } catch (error) {
