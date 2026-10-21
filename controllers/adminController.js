@@ -6,6 +6,18 @@ const PreOrder = require('../models/PreOrder');
 const { isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 const { signAdminToken } = require('../middleware/authMiddleware');
+const {
+  sendOrderShippedEmail,
+  sendOrderDeliveredEmail,
+  sendOrderCancelledEmail,
+  sendOrderInvoiceEmail,
+  verifyEmailService,
+} = require('../services/emailService');
+const {
+  createSteadfastConsignment,
+  getSteadfastAccountBalance,
+  checkSteadfastDeliveryStatus,
+} = require('../services/steadfastService');
 
 // ---------------------------------------------------------------------------
 // 1. ADMIN AUTHENTICATION
@@ -712,8 +724,10 @@ const getAllOrdersAdmin = async (req, res) => {
 };
 
 /**
- * SEND TO COURIER SERVICE: STEADFAST COURIER
- * Changes order status to "Shipped" and attaches live Steadfast tracking credentials
+ * SEND TO COURIER SERVICE: STEADFAST COURIER / PACKZY API
+ * Dispatches live consignment to Steadfast Courier via portal.packzy.com/api/v1/create_order,
+ * calculates smart COD amount, updates orderStatus to "Shipped", attaches tracking details,
+ * and triggers automated Shipped invoice email notification to the customer.
  */
 const shipOrderWithSteadfast = async (req, res) => {
   try {
@@ -721,7 +735,10 @@ const shipOrderWithSteadfast = async (req, res) => {
     const {
       consignmentId: customConsignment,
       trackingCode: customTracking,
+      cod_amount,
+      codAmount: bodyCod,
       note = '',
+      forceReship = false,
     } = req.body;
 
     if (!invoiceNumber) {
@@ -756,86 +773,174 @@ const shipOrderWithSteadfast = async (req, res) => {
       });
     }
 
-    // Default unique Steadfast identifiers
-    let consignmentId = customConsignment || Math.floor(600000 + Math.random() * 390000);
-    let trackingCode = customTracking || `SF${Math.floor(10000000 + Math.random() * 90000000)}`;
-
-    // If Steadfast API keys exist in .env, attempt live dispatch to Steadfast portal
-    const apiKey = process.env.STEADFAST_API_KEY;
-    const secretKey = process.env.STEADFAST_SECRET_KEY;
-
-    if (apiKey && secretKey) {
-      try {
-        const codAmount = order.paymentMethod === 'COD' ? order.totalAmount : 0;
-        const sfPayload = {
-          invoice: order.invoiceNumber,
-          recipient_name: order.customerDetails?.name || 'Customer',
-          recipient_phone: order.customerDetails?.phone || '',
-          recipient_address: order.customerDetails?.address || 'Bangladesh',
-          cod_amount: codAmount,
-          note: note || order.customerDetails?.note || 'Sarail 1 to 99 Plus Shop Delivery',
-        };
-
-        const sfResponse = await fetch('https://portal.steadfast.com.bd/api/v1/create_order', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Api-Key': apiKey,
-            'Secret-Key': secretKey,
-          },
-          body: JSON.stringify(sfPayload),
-        });
-
-        const sfData = await sfResponse.json().catch(() => ({}));
-        if (sfResponse.ok && sfData?.consignment) {
-          consignmentId = sfData.consignment.consignment_id || consignmentId;
-          trackingCode = sfData.consignment.tracking_code || trackingCode;
-          console.log(`[Steadfast API] Live consignment created for ${order.invoiceNumber}: ${trackingCode}`);
-        } else {
-          console.warn('[Steadfast API Warning]', sfData?.message || 'Using fallback consignment code.');
-        }
-      } catch (sfErr) {
-        console.warn('[Steadfast API Connection Warning]:', sfErr.message);
-      }
-    }
-
-    const trackingUrl = `https://steadfast.com.bd/t/${trackingCode}`;
-    const shippedAt = new Date();
-
-    const courierData = {
-      provider: 'Steadfast',
-      consignmentId,
-      trackingCode,
-      trackingUrl,
-      shippedAt,
-    };
-
-    if (isMongoConnected()) {
-      order.orderStatus = 'Shipped';
-      order.courierData = courierData;
-      order.adminViewed = true;
-      order.viewedAt = new Date();
-      await order.save();
-
+    // Check if already dispatched to Steadfast (unless forceReship is true)
+    if (!forceReship && order.orderStatus === 'Shipped' && order.courierData?.consignmentId) {
       return res.status(200).json({
         success: true,
-        message: `Order #${order.invoiceNumber} successfully handed over to Steadfast Courier! Status is now Shipped.`,
+        message: `Order #${order.invoiceNumber} has already been dispatched to Steadfast Courier (Tracking: ${order.courierData.trackingCode}).`,
         order,
       });
     }
 
+    const explicitCod = cod_amount !== undefined ? cod_amount : bodyCod;
+
+    // Dispatch consignment to Steadfast Courier
+    let consignmentResult = null;
+
+    if (customConsignment || customTracking) {
+      // Manual custom overrides (e.g. admin manually entered an existing tracking code)
+      consignmentResult = {
+        success: true,
+        consignmentId: customConsignment || Math.floor(600000 + Math.random() * 390000),
+        trackingCode: customTracking || `SF${Math.floor(10000000 + Math.random() * 90000000)}`,
+        trackingUrl: customTracking ? `https://steadfast.com.bd/t/${customTracking}` : undefined,
+        status: 'pending',
+        codAmount: explicitCod !== undefined ? Number(explicitCod) : undefined,
+        message: 'Custom consignment parameters applied.',
+      };
+      if (!consignmentResult.trackingUrl) {
+        consignmentResult.trackingUrl = `https://steadfast.com.bd/t/${consignmentResult.trackingCode}`;
+      }
+    } else {
+      consignmentResult = await createSteadfastConsignment(order, {
+        codAmount: explicitCod,
+        note,
+        allowMockFallback: process.env.NODE_ENV === 'test' || !process.env.STEADFAST_API_KEY,
+      });
+    }
+
+    if (!consignmentResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: consignmentResult.error || 'Failed to dispatch order to Steadfast Courier.',
+        raw: consignmentResult.raw,
+      });
+    }
+
+    const courierData = {
+      provider: 'Steadfast',
+      consignmentId: consignmentResult.consignmentId,
+      trackingCode: consignmentResult.trackingCode,
+      trackingUrl: consignmentResult.trackingUrl || `https://steadfast.com.bd/t/${consignmentResult.trackingCode}`,
+      status: consignmentResult.status || 'pending',
+      codAmount: consignmentResult.codAmount,
+      shippedAt: new Date(),
+    };
+
     order.orderStatus = 'Shipped';
     order.courierData = courierData;
+    order.adminViewed = true;
+    order.viewedAt = new Date();
+
+    if (isMongoConnected()) {
+      await order.save();
+    }
+
+    // Trigger customer notification email asynchronously
+    const orderData = order.toObject ? order.toObject() : order;
+    sendOrderShippedEmail(orderData).catch((err) =>
+      console.error('[adminController] Steadfast shipped email dispatch error:', err.message)
+    );
+
     return res.status(200).json({
       success: true,
-      message: `Order #${order.invoiceNumber} handed over to Steadfast Courier. Status set to Shipped.`,
+      message: `Order #${order.invoiceNumber} successfully handed over to Steadfast Courier! Tracking: ${courierData.trackingCode} (COD: ৳${courierData.codAmount !== undefined ? courierData.codAmount : 0}).`,
       order,
+      consignment: consignmentResult.consignment || courierData,
     });
   } catch (error) {
     console.error('Error in shipOrderWithSteadfast:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to send order to Steadfast Courier.',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * GET /api/admin/courier/balance
+ * Returns the current merchant balance from Steadfast Courier
+ */
+const getSteadfastBalanceAdmin = async (req, res) => {
+  try {
+    const result = await getSteadfastAccountBalance();
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        balance: result.balance,
+      });
+    }
+    return res.status(400).json({
+      success: false,
+      message: result.error || 'Failed to retrieve Steadfast account balance.',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error querying Steadfast balance.',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * GET /api/admin/orders/:invoiceNumber/courier-status
+ * Query real-time consignment delivery status from Steadfast Courier
+ */
+const checkCourierStatusAdmin = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    let order = null;
+    if (isMongoConnected()) {
+      order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, 'i') },
+      });
+    } else {
+      order = memoryStore.orders.find(
+        (o) => o.invoiceNumber?.toLowerCase() === invoiceNumber.toLowerCase()
+      );
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: `Order #${invoiceNumber} not found.`,
+      });
+    }
+
+    const trackingCode = order.courierData?.trackingCode;
+    const consignmentId = order.courierData?.consignmentId;
+
+    const result = await checkSteadfastDeliveryStatus({
+      invoice: order.invoiceNumber,
+      trackingCode,
+      consignmentId,
+    });
+
+    if (result.success) {
+      if (result.status && order.courierData) {
+        order.courierData.status = result.status;
+        if (isMongoConnected()) {
+          await order.save();
+        }
+      }
+      return res.status(200).json({
+        success: true,
+        status: result.status,
+        trackingCode: trackingCode || result.trackingCode,
+        trackingUrl: order.courierData?.trackingUrl || (trackingCode ? `https://steadfast.com.bd/t/${trackingCode}` : ''),
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: result.error || 'Failed to fetch status from Steadfast.',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to query courier status.',
       error: error.message,
     });
   }
@@ -891,6 +996,22 @@ const updateOrderStatusAdmin = async (req, res) => {
 
       await order.save();
 
+      // Dispatch automated email notification for Shipped, Delivered and Cancelled statuses
+      const orderData = order.toObject ? order.toObject() : order;
+      if (orderStatus === 'Shipped') {
+        sendOrderShippedEmail(orderData).catch((err) =>
+          console.error('[adminController] Shipped email dispatch error:', err.message)
+        );
+      } else if (orderStatus === 'Delivered') {
+        sendOrderDeliveredEmail(orderData).catch((err) =>
+          console.error('[adminController] Delivered email dispatch error:', err.message)
+        );
+      } else if (orderStatus === 'Cancelled') {
+        sendOrderCancelledEmail(orderData).catch((err) =>
+          console.error('[adminController] Cancelled email dispatch error:', err.message)
+        );
+      }
+
       return res.status(200).json({
         success: true,
         message: `Order status changed from "${prevStatus}" to "${orderStatus}".`,
@@ -906,6 +1027,19 @@ const updateOrderStatusAdmin = async (req, res) => {
     }
 
     order.orderStatus = orderStatus;
+    if (orderStatus === 'Shipped') {
+      sendOrderShippedEmail(order).catch((err) =>
+        console.error('[adminController] Shipped email dispatch error (memory):', err.message)
+      );
+    } else if (orderStatus === 'Delivered') {
+      sendOrderDeliveredEmail(order).catch((err) =>
+        console.error('[adminController] Delivered email dispatch error (memory):', err.message)
+      );
+    } else if (orderStatus === 'Cancelled') {
+      sendOrderCancelledEmail(order).catch((err) =>
+        console.error('[adminController] Cancelled email dispatch error (memory):', err.message)
+      );
+    }
     return res.status(200).json({
       success: true,
       message: `Order status set to "${orderStatus}".`,
@@ -1556,6 +1690,93 @@ const updatePreOrderStatusAdmin = async (req, res) => {
   }
 };
 
+/**
+ * Manually Send / Resend Order Invoice Email to Customer
+ * POST /api/admin/orders/:invoiceNumber/send-email
+ */
+const sendOrderInvoiceEmailAdmin = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { statusType } = req.body || {};
+
+    let order = null;
+    if (isMongoConnected()) {
+      order = await Order.findOne({
+        invoiceNumber: { $regex: new RegExp(`^${invoiceNumber}$`, 'i') },
+      }).lean();
+    } else {
+      order = memoryStore.orders.find(
+        (o) => o.invoiceNumber?.toLowerCase() === invoiceNumber.toLowerCase()
+      );
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: `Order #${invoiceNumber} not found.`,
+      });
+    }
+
+    const customerEmail = (order.customerDetails?.email || order.email || '').trim();
+    if (!customerEmail || !customerEmail.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        message: `Order #${invoiceNumber} does not have a valid customer email address on file.`,
+      });
+    }
+
+    const effectiveStatus = statusType || order.orderStatus || 'Shipped';
+    const emailResult = await sendOrderInvoiceEmail(order, effectiveStatus);
+
+    if (emailResult.success) {
+      return res.status(200).json({
+        success: true,
+        message: `Invoice email successfully sent to customer (${customerEmail}) with status "${effectiveStatus}".`,
+        messageId: emailResult.messageId,
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: emailResult.error || 'Failed to dispatch email.',
+      });
+    }
+  } catch (error) {
+    console.error('Error in sendOrderInvoiceEmailAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to process email invoice request.',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Test Gmail SMTP Configuration
+ * GET /api/admin/test-email
+ */
+const testEmailConfigAdmin = async (req, res) => {
+  try {
+    const result = await verifyEmailService();
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        message: `Gmail SMTP authenticated successfully for ${process.env.EMAIL_USER || 'sarail1to99plusshop@gmail.com'}.`,
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: 'Gmail SMTP authentication failed.',
+        error: result.error,
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   adminLogin,
   getSystemStatus,
@@ -1577,5 +1798,9 @@ module.exports = {
   getUserOrdersAdmin,
   getAllPreOrdersAdmin,
   updatePreOrderStatusAdmin,
+  sendOrderInvoiceEmailAdmin,
+  testEmailConfigAdmin,
+  getSteadfastBalanceAdmin,
+  checkCourierStatusAdmin,
 };
 

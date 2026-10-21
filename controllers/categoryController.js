@@ -185,13 +185,7 @@ const deleteCategory = async (req, res) => {
   }
 };
 
-// GET /api/delivery-charges
-const getDeliveryCharges = async (req, res) => {
-  return res.status(200).json({
-    success: true,
-    deliveryCharges: initialDeliveryCharges,
-  });
-};
+const { getDeliveryCharges } = require('./deliveryController');
 
 module.exports = {
   getCategories,
