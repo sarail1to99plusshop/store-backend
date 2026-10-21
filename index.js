@@ -13,6 +13,7 @@ const reviewRoutes = require('./routes/reviewRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const courierRoutes = require('./routes/courierRoutes');
 
 const app = express();
 
@@ -134,6 +135,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/courier', courierRoutes);
 
 // Convenience top-level endpoints
 app.get('/api/delivery-charges', getDeliveryCharges);

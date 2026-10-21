@@ -2,8 +2,11 @@ const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const PreOrder = require('../models/PreOrder');
+const DeliveryCharge = require('../models/DeliveryCharge');
 const { isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
+const { sendOrderCancelledEmail } = require('../services/emailService');
+const { createSteadfastConsignment } = require('../services/steadfastService');
 
 // Allowed server-side delivery fee dictionary
 const SERVER_DELIVERY_FEES = {
@@ -35,11 +38,94 @@ const createOrder = async (req, res) => {
       courierData,
     } = req.body;
 
-    // 1. Validate Customer Contact Details
-    if (!customerDetails?.name || !customerDetails?.phone || !customerDetails?.address) {
+    // 1. Validate Customer Contact Details & Enforce Detailed Delivery Address
+    const rawName = (customerDetails?.name || '').trim();
+    const rawPhone = (customerDetails?.phone || '').trim();
+    const hasStructuredAddress = Boolean(
+      customerDetails?.streetAddress ||
+      customerDetails?.district ||
+      customerDetails?.thana
+    );
+
+    let rawStreet = (customerDetails?.streetAddress || '').trim();
+    let rawDistrict = (customerDetails?.district || '').trim();
+    let rawThana = (customerDetails?.thana || '').trim();
+    const rawDivision = (customerDetails?.division || '').trim();
+    const rawSingleAddress = (customerDetails?.address || '').trim();
+
+    // Check basic presence of name and phone
+    if (!rawName || !rawPhone) {
       return res.status(400).json({
         success: false,
-        message: 'Customer name, phone, and delivery address are strictly required.',
+        message: 'Customer name, phone, district, thana, and street address are strictly required.',
+      });
+    }
+
+    // Phone format validation: 11-digit Bangladeshi mobile number
+    const cleanPhone = rawPhone.replace(/[\s-]/g, '').replace(/^\+?88/, '');
+    const bdPhoneRegex = /^01[3-9]\d{8}$/;
+    if (!bdPhoneRegex.test(cleanPhone)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid 11-digit Bangladeshi mobile number (e.g. 01712345678).',
+      });
+    }
+
+    if (hasStructuredAddress) {
+      // User or form submitted structured address
+      if (!rawStreet || !rawDistrict || !rawThana) {
+        return res.status(400).json({
+          success: false,
+          message: 'Customer name, phone, district, thana, and street address are strictly required.',
+        });
+      }
+      if (rawStreet.length < 6) {
+        return res.status(400).json({
+          success: false,
+          message: 'Detailed street/village address must be at least 6 characters long.',
+        });
+      }
+    } else {
+      // Legacy single address string
+      if (!rawSingleAddress) {
+        return res.status(400).json({
+          success: false,
+          message: 'Customer name, phone, and delivery address are strictly required.',
+        });
+      }
+      rawStreet = rawSingleAddress;
+      const parts = rawSingleAddress.split(',').map((p) => p.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        rawDistrict = parts[parts.length - 1];
+        rawThana = parts[parts.length - 2];
+      }
+    }
+
+    // Construct final hierarchical recipient address: [Detailed Street / Village / Landmark] + [Thana / Upazila] + [District]
+    const recipientAddress = (customerDetails?.streetAddress && customerDetails?.thana && customerDetails?.district)
+      ? `${rawStreet}, ${rawThana}, ${rawDistrict}`
+      : (customerDetails?.fullAddress?.trim() || rawSingleAddress || `${rawStreet}, ${rawThana}, ${rawDistrict}`);
+
+    // Clean address for validation
+    const cleanAddress = recipientAddress.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const addressWords = cleanAddress.split(/[\s,.-]+/).filter(Boolean);
+    const bdDistrictOrHubs = [
+      'dhaka', 'gazipur', 'narayanganj', 'chittagong', 'chattogram', 'sylhet',
+      'comilla', 'cumilla', 'brahmanbaria', 'rajshahi', 'khulna', 'barisal',
+      'rangpur', 'mymensingh', 'jashore', 'bogra', 'sadar', 'ctg', 'dhk',
+      'narsingdi', 'raipura', 'savar', 'keraniganj', 'tongi', 'ashulia',
+      'feni', 'noakhali', 'coxsbazar', 'tangail', 'faridpur', 'sirajganj',
+      'pabna', 'kushtia', 'dinajpur', 'naogaon', 'natore',
+    ];
+    const isAllHubWords =
+      addressWords.length <= 4 &&
+      addressWords.every((w) => bdDistrictOrHubs.includes(w.toLowerCase()));
+
+    if (cleanAddress.length < 15 || addressWords.length < 3 || isAllHubWords) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Please provide a complete and detailed delivery address with at least 15 characters (House/Road, Village/Area, Landmark, Thana, District). Vague district or hub-only names (e.g. "Dhaka, Narsingdi, Raipura") cannot be accepted for courier delivery.',
       });
     }
 
@@ -104,20 +190,44 @@ const createOrder = async (req, res) => {
     }
 
     // 4. Delivery Zone Fee Validation
-    let validatedDeliveryFee = 60;
-    if (req.body.deliveryFee !== undefined && !isNaN(Number(req.body.deliveryFee))) {
-      validatedDeliveryFee = Math.max(0, Number(req.body.deliveryFee));
-    } else {
-      const rawDeliveryZone = (customerDetails.deliveryLocation || '').trim();
-      const isOutsideDhaka = rawDeliveryZone.toLowerCase().includes('outside');
-      validatedDeliveryFee = isOutsideDhaka ? 120 : 60;
+    let activeCharges = Array.isArray(memoryStore.deliveryCharges) ? memoryStore.deliveryCharges : [];
+    if (isMongoConnected()) {
+      try {
+        const dbCharges = await DeliveryCharge.find({ isActive: { $ne: false } }).lean();
+        if (dbCharges && dbCharges.length > 0) {
+          activeCharges = dbCharges;
+        }
+      } catch (err) {
+        console.warn('[orderController] Fallback to memory delivery charges:', err.message);
+      }
     }
 
-    if (isBkash && paymentMode === 'delivery' && validatedDeliveryFee <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Delivery charge only mode requires a delivery fee greater than zero.',
-      });
+    const rawDeliveryZone = (customerDetails.deliveryLocation || '').trim();
+    const matchedZone = activeCharges.find(
+      (c) =>
+        c.location?.toLowerCase() === rawDeliveryZone.toLowerCase() ||
+        c.id?.toLowerCase() === rawDeliveryZone.toLowerCase()
+    );
+
+    let validatedDeliveryFee = matchedZone
+      ? matchedZone.charge
+      : (rawDeliveryZone.toLowerCase().includes('outside') ? 120 : 60);
+
+    if (req.body.deliveryFee !== undefined && !isNaN(Number(req.body.deliveryFee))) {
+      const clientFee = Number(req.body.deliveryFee);
+      if (activeCharges.some((c) => c.charge === clientFee) || clientFee === validatedDeliveryFee) {
+        validatedDeliveryFee = clientFee;
+      }
+    }
+
+    if (isBkash && paymentMode === 'delivery') {
+      const submittedFee = req.body.deliveryFee !== undefined ? Number(req.body.deliveryFee) : validatedDeliveryFee;
+      if (submittedFee <= 0 || validatedDeliveryFee <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Delivery charge only mode requires a delivery fee greater than zero.',
+        });
+      }
     }
 
     // Helper to robustly extract product identifier across sanitized $oid/_oid/string/number formats
@@ -339,13 +449,19 @@ const createOrder = async (req, res) => {
       invoiceNumber: generatedInvoice,
       userId: String(userId || '').trim(),
       customerDetails: {
-        name: customerDetails.name,
-        email: customerDetails.email || '',
-        phone: customerDetails.phone,
-        address: customerDetails.address,
+        name: rawName,
+        email: (customerDetails.email || '').trim().toLowerCase(),
+        phone: cleanPhone,
+        streetAddress: rawStreet,
+        thana: rawThana,
+        district: rawDistrict,
+        division: rawDivision,
+        fullAddress: recipientAddress,
+        address: recipientAddress,
         note: customerDetails.note || '',
         deliveryLocation:
           customerDetails.deliveryLocation ||
+          matchedZone?.location ||
           (validatedDeliveryFee === 120 ? 'Outside Dhaka' : 'Inside Dhaka'),
       },
       items: verifiedItems.map((item) => ({
@@ -665,6 +781,11 @@ const cancelOrder = async (req, res) => {
         }
       }
 
+      // Dispatch order cancelled notification email to customer
+      sendOrderCancelledEmail(order.toObject ? order.toObject() : order).catch((err) =>
+        console.error('[orderController] Cancelled email dispatch error:', err.message)
+      );
+
       return res.status(200).json({
         success: true,
         message: 'Order has been cancelled successfully.',
@@ -699,6 +820,11 @@ const cancelOrder = async (req, res) => {
 
     memOrder.orderStatus = 'Cancelled';
     memOrder.updatedAt = new Date().toISOString();
+
+    // Dispatch order cancelled notification email (memory store)
+    sendOrderCancelledEmail(memOrder).catch((err) =>
+      console.error('[orderController] Cancelled email dispatch error (memory):', err.message)
+    );
 
     return res.status(200).json({
       success: true,
@@ -783,6 +909,32 @@ const updatePaymentStatus = async (req, res) => {
   }
 };
 
+/**
+ * Dispatch an order to Steadfast Courier
+ * Uses official Steadfast API: POST https://portal.steadfast.com.bd/api/v1/create_order
+ * 
+ * Payload structure:
+ * - recipient_address: `${customerDetails.streetAddress}, ${customerDetails.thana}, ${customerDetails.district}`
+ * - recipient_name: customerDetails.name
+ * - recipient_phone: customerDetails.phone
+ * - cod_amount: order.totalAmount
+ * - invoice: order.invoiceNumber
+ * - note: "Handle with care - Sarail 1 to 99+ Shop Delivery"
+ */
+const dispatchOrderToSteadfast = async (order, options = {}) => {
+  const customer = order?.customerDetails || {};
+  const recipientAddress = (customer.streetAddress && customer.thana && customer.district)
+    ? `${customer.streetAddress.trim()}, ${customer.thana.trim()}, ${customer.district.trim()}`
+    : (customer.fullAddress || customer.address || '').trim();
+
+  return await createSteadfastConsignment(order, {
+    recipientAddress,
+    codAmount: options.codAmount !== undefined ? options.codAmount : order?.totalAmount,
+    note: options.note || 'Handle with care - Sarail 1 to 99+ Shop Delivery',
+    ...options,
+  });
+};
+
 module.exports = {
   createOrder,
   trackOrder,
@@ -790,4 +942,5 @@ module.exports = {
   cancelOrder,
   createPreOrder,
   updatePaymentStatus,
+  dispatchOrderToSteadfast,
 };
