@@ -1777,6 +1777,75 @@ const testEmailConfigAdmin = async (req, res) => {
   }
 };
 
+/**
+ * Permanently upload an image to ImgBB via the V1 Upload API.
+ * CRITICAL: Omits the expiration parameter to ensure permanent hosting (expiration: 0).
+ */
+const uploadImageToImgBBAdmin = async (req, res) => {
+  try {
+    const { image, name } = req.body;
+    if (!image) {
+      return res.status(400).json({
+        success: false,
+        message: 'Image data (base64 string or URL) is required.',
+      });
+    }
+
+    const apiKey = (process.env.IMGBB_API_KEY || '').trim();
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        message: 'IMGBB_API_KEY is not configured in backend/.env.',
+        code: 'MISSING_IMGBB_KEY',
+      });
+    }
+
+    // Prepare clean base64 data (strip data URL prefix if present)
+    const cleanImage = typeof image === 'string'
+      ? image.replace(/^data:image\/[a-z]+;base64,/, '')
+      : image;
+
+    const formData = new URLSearchParams();
+    formData.append('image', cleanImage);
+    if (name) formData.append('name', name);
+    // Explicitly NO expiration parameter => Permanent storage!
+
+    const response = await fetch(
+      `https://api.imgbb.com/1/upload?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString(),
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+      return res.status(response.status || 500).json({
+        success: false,
+        message: data?.error?.message || 'Failed to upload image to ImgBB.',
+        error: data?.error,
+      });
+    }
+
+    const permanentUrl = data?.data?.url || data?.data?.display_url;
+    return res.status(200).json({
+      success: true,
+      url: permanentUrl,
+      data: data.data,
+    });
+  } catch (error) {
+    console.error('Error in uploadImageToImgBBAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error while uploading image to ImgBB.',
+    });
+  }
+};
+
 module.exports = {
   adminLogin,
   getSystemStatus,
@@ -1802,5 +1871,6 @@ module.exports = {
   testEmailConfigAdmin,
   getSteadfastBalanceAdmin,
   checkCourierStatusAdmin,
+  uploadImageToImgBBAdmin,
 };
 
