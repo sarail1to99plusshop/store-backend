@@ -25,6 +25,7 @@ const {
   testEmailConfigAdmin,
   getSteadfastBalanceAdmin,
   checkCourierStatusAdmin,
+  uploadImageToImgBBAdmin,
 } = require('../controllers/adminController');
 const {
   getCategories,
@@ -61,6 +62,7 @@ router.delete('/delivery-charges/:id', deleteDeliveryChargeAdmin);
 router.get('/system-status', getSystemStatus);
 
 // Product Management (CRUD & Stock control)
+router.post('/upload-image', uploadImageToImgBBAdmin);
 router.get('/products', getAllProductsAdmin);
 router.post('/products', createProductAdmin);
 router.put('/products/:id', updateProductAdmin);
