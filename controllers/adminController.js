@@ -138,6 +138,8 @@ const getSystemStatus = async (req, res) => {
         shippedOrdersCount,
         lowStockCount,
         outOfStockCount,
+        preOrdersCount,
+        pendingPreOrdersCount,
         revenueAgg,
       ] = await Promise.all([
         Product.countDocuments(),
@@ -148,6 +150,8 @@ const getSystemStatus = async (req, res) => {
         Order.countDocuments({ orderStatus: 'Shipped' }),
         Product.countDocuments({ stock: { $gt: 0, $lt: 10 } }),
         Product.countDocuments({ stock: { $lte: 0 } }),
+        PreOrder.countDocuments(),
+        PreOrder.countDocuments({ status: 'Pending' }),
         Order.aggregate([
           {
             $group: {
@@ -172,6 +176,8 @@ const getSystemStatus = async (req, res) => {
         shippedOrdersCount,
         lowStockCount,
         outOfStockCount,
+        preOrdersCount,
+        pendingPreOrdersCount,
         totalDeliveredRevenue: revenueAgg[0]?.deliveredRevenue || 0,
         totalOrdersRevenue: revenueAgg[0]?.totalRevenue || 0,
       };
@@ -186,6 +192,8 @@ const getSystemStatus = async (req, res) => {
         shippedOrdersCount: memoryStore.orders?.filter((o) => o.orderStatus === 'Shipped').length || 0,
         lowStockCount: memoryStore.products?.filter((p) => p.stock > 0 && p.stock < 10).length || 0,
         outOfStockCount: memoryStore.products?.filter((p) => p.stock <= 0).length || 0,
+        preOrdersCount: memoryStore.preOrders?.length || 0,
+        pendingPreOrdersCount: memoryStore.preOrders?.filter((p) => p.status === 'Pending').length || 0,
         totalDeliveredRevenue: memoryStore.orders
           ?.filter((o) => o.orderStatus === 'Delivered')
           .reduce((acc, o) => acc + (o.totalAmount || 0), 0) || 0,
