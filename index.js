@@ -40,6 +40,10 @@ app.use(
 const configuredOrigins = [
   process.env.FRONTEND_URL,
   process.env.ADMIN_URL,
+  'https://sarail1to99plus-shop.com',
+  'http://sarail1to99plus-shop.com',
+  'https://www.sarail1to99plus-shop.com',
+  'http://www.sarail1to99plus-shop.com',
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:5175',
@@ -48,7 +52,6 @@ const configuredOrigins = [
   'http://127.0.0.1:5174',
   'http://127.0.0.1:5175',
   'http://127.0.0.1:3000',
-  
 ]
   .filter(Boolean)
   .map((url) => url.trim().replace(/\/+$/, ''));
@@ -62,9 +65,10 @@ const corsOptions = {
 
     const cleanOrigin = origin.trim().replace(/\/+$/, '');
 
-    // Allow configured origins or any vercel.app deployment / local ports
+    // Allow configured origins or any vercel.app deployment / local ports / custom domain
     const isAllowed =
       configuredOrigins.includes(cleanOrigin) ||
+      cleanOrigin.includes('sarail1to99plus-shop.com') ||
       cleanOrigin.endsWith('.vercel.app') ||
       cleanOrigin.includes('localhost:') ||
       cleanOrigin.includes('127.0.0.1:');

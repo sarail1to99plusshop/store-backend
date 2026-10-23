@@ -90,7 +90,7 @@ const buildOrderEmailContent = (order, statusType = 'Shipped') => {
   const trackingUrl = courierData.trackingUrl || (trackingCode ? `https://steadfast.com.bd/t/${trackingCode}` : '');
   const supportPhone = process.env.SUPPORT_PHONE || '01998-789157';
   const storeEmail = process.env.EMAIL_USER || 'sarail1to99plusshop@gmail.com';
-  const frontendUrl = process.env.FRONTEND_URL || 'https://sarail1to99plusshop.com';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://sarail1to99plus-shop.com';
   const trackingPageUrl = `${frontendUrl.replace(/\/$/, '')}/track-order?invoice=${encodeURIComponent(invoice)}`;
 
   const isShipped = statusType.toLowerCase() === 'shipped';
