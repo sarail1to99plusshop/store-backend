@@ -8,42 +8,19 @@ const { computeRatingStats } = require('./reviewController');
 // GET /api/products
 // Supports pagination (default 10 products per page), category, tag, search, and sorting
 // Dynamically calculates rating & review count for each product from actual user reviews
-const BLOCKED_HASH_MAP = {
-  KzjmL6Jt: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
-  ZRRcM2W8: 'https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=600&auto=format&fit=crop&q=80',
-  bg1ZgJ6n: 'https://images.unsplash.com/photo-1585421514284-efb74c2b69ba?w=600&auto=format&fit=crop&q=80',
-  NdBm30LW: 'https://images.unsplash.com/photo-1584813470613-5b1c1cad3d69?w=600&auto=format&fit=crop&q=80',
-  '0y1DhhGR': 'https://images.unsplash.com/photo-1517256064527-09c73fc73e38?w=600&auto=format&fit=crop&q=80',
-  YBh7Ccbr: 'https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=600&auto=format&fit=crop&q=80',
-  HTH458qM: 'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=600&auto=format&fit=crop&q=80',
-  yB6MBdrX: 'https://images.unsplash.com/photo-1515488042361-ee00e0ddd4e4?w=600&auto=format&fit=crop&q=80',
-  k2Mbz0mH: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
-  q3kcHV8G: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
-};
-
-const sanitizeProductImage = (url) => {
-  if (!url || typeof url !== 'string') return url;
-  for (const [hash, replacement] of Object.entries(BLOCKED_HASH_MAP)) {
-    if (url.includes(hash)) {
-      return replacement;
-    }
-  }
-  return url;
-};
-
-const sanitizeProduct = (p) => {
+const normalizeProductVariants = (p) => {
   if (!p) return p;
-  const thumbnail = sanitizeProductImage(p.thumbnail);
-  const variants = Array.isArray(p.variants)
+  const thumbnail = p.thumbnail || (Array.isArray(p.images) ? p.images[0] : '') || '';
+  const variants = Array.isArray(p.variants) && p.variants.length > 0
     ? p.variants.map((v) => ({
         ...v,
-        images: Array.isArray(v.images)
-          ? v.images.map(sanitizeProductImage)
+        images: Array.isArray(v.images) && v.images.length > 0
+          ? v.images
           : [thumbnail].filter(Boolean),
       }))
     : [{ colorName: 'Standard', colorCode: '#000000', images: [thumbnail].filter(Boolean) }];
-  const images = Array.isArray(p.images)
-    ? p.images.map(sanitizeProductImage)
+  const images = Array.isArray(p.images) && p.images.length > 0
+    ? p.images
     : [thumbnail].filter(Boolean);
 
   return {
@@ -153,7 +130,7 @@ const getProducts = async (req, res) => {
       });
     }
 
-    rawProducts = rawProducts.map(sanitizeProduct);
+    rawProducts = rawProducts.map(normalizeProductVariants);
 
     // Collect unique tags across all products
     const tagSet = new Set();
@@ -317,14 +294,10 @@ const getProductById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      product: sanitizeProduct({
+      product: normalizeProductVariants({
         ...product,
         rating: averageRating,
         reviews: totalReviews,
-        variants:
-          Array.isArray(product.variants) && product.variants.length > 0
-            ? product.variants
-            : [{ colorName: 'Standard', colorCode: '#000000', images: [product.thumbnail].filter(Boolean) }],
       }),
     });
   } catch (error) {
