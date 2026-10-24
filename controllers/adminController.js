@@ -3,7 +3,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const User = require('../models/User');
 const PreOrder = require('../models/PreOrder');
-const { isMongoConnected } = require('../config/db');
+const { connectDB, isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 const { signAdminToken } = require('../middleware/authMiddleware');
 const {
@@ -98,6 +98,9 @@ const adminLogin = async (req, res) => {
 // ---------------------------------------------------------------------------
 const getSystemStatus = async (req, res) => {
   try {
+    if (!isMongoConnected()) {
+      await connectDB().catch(() => {});
+    }
     const readyState = mongoose.connection.readyState;
     const isConnected = readyState === 1;
 
@@ -646,6 +649,9 @@ const deleteProductAdmin = async (req, res) => {
 // ---------------------------------------------------------------------------
 const getAllOrdersAdmin = async (req, res) => {
   try {
+    if (!isMongoConnected()) {
+      await connectDB().catch(() => {});
+    }
     const {
       status = 'all',
       paymentStatus = 'all',
@@ -1759,7 +1765,7 @@ const sendOrderInvoiceEmailAdmin = async (req, res) => {
 };
 
 /**
- * Test Gmail SMTP Configuration
+ * Test cPanel / Custom SMTP Configuration
  * GET /api/admin/test-email
  */
 const testEmailConfigAdmin = async (req, res) => {
@@ -1768,12 +1774,12 @@ const testEmailConfigAdmin = async (req, res) => {
     if (result.success) {
       return res.status(200).json({
         success: true,
-        message: `Gmail SMTP authenticated successfully for ${process.env.EMAIL_USER || 'sarail1to99plusshop@gmail.com'}.`,
+        message: `SMTP authenticated successfully for ${process.env.EMAIL_USER || 'support@sarail1to99plus-shop.com'}.`,
       });
     } else {
       return res.status(500).json({
         success: false,
-        message: 'Gmail SMTP authentication failed.',
+        message: 'SMTP authentication failed.',
         error: result.error,
       });
     }

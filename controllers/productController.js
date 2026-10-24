@@ -8,6 +8,37 @@ const { computeRatingStats } = require('./reviewController');
 // GET /api/products
 // Supports pagination (default 10 products per page), category, tag, search, and sorting
 // Dynamically calculates rating & review count for each product from actual user reviews
+const sanitizeProductImage = (url) => {
+  if (!url || typeof url !== 'string') return url;
+  if (url.includes('k2Mbz0mH') || url.includes('q3kcHV8G')) {
+    return 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80';
+  }
+  return url;
+};
+
+const sanitizeProduct = (p) => {
+  if (!p) return p;
+  const thumbnail = sanitizeProductImage(p.thumbnail);
+  const variants = Array.isArray(p.variants)
+    ? p.variants.map((v) => ({
+        ...v,
+        images: Array.isArray(v.images)
+          ? v.images.map(sanitizeProductImage)
+          : [thumbnail].filter(Boolean),
+      }))
+    : [{ colorName: 'Standard', colorCode: '#000000', images: [thumbnail].filter(Boolean) }];
+  const images = Array.isArray(p.images)
+    ? p.images.map(sanitizeProductImage)
+    : [thumbnail].filter(Boolean);
+
+  return {
+    ...p,
+    thumbnail,
+    variants,
+    images,
+  };
+};
+
 const getProducts = async (req, res) => {
   try {
     const {
@@ -106,6 +137,8 @@ const getProducts = async (req, res) => {
         };
       });
     }
+
+    rawProducts = rawProducts.map(sanitizeProduct);
 
     // Collect unique tags across all products
     const tagSet = new Set();
@@ -244,7 +277,7 @@ const getProductById = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        product,
+        product: sanitizeProduct(product),
       });
     }
 
@@ -269,7 +302,7 @@ const getProductById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      product: {
+      product: sanitizeProduct({
         ...product,
         rating: averageRating,
         reviews: totalReviews,
@@ -277,7 +310,7 @@ const getProductById = async (req, res) => {
           Array.isArray(product.variants) && product.variants.length > 0
             ? product.variants
             : [{ colorName: 'Standard', colorCode: '#000000', images: [product.thumbnail].filter(Boolean) }],
-      },
+      }),
     });
   } catch (error) {
     console.error('Error in getProductById:', error);

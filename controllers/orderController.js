@@ -3,7 +3,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const PreOrder = require('../models/PreOrder');
 const DeliveryCharge = require('../models/DeliveryCharge');
-const { isMongoConnected } = require('../config/db');
+const { connectDB, isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 const { sendOrderCancelledEmail } = require('../services/emailService');
 const { createSteadfastConsignment } = require('../services/steadfastService');
@@ -37,6 +37,11 @@ const createOrder = async (req, res) => {
       trxId = '',
       courierData,
     } = req.body;
+
+    // Ensure active MongoDB connection in serverless / cold-start environment
+    if (!isMongoConnected()) {
+      await connectDB().catch(() => {});
+    }
 
     // 1. Validate Customer Contact Details & Enforce Detailed Delivery Address
     const rawName = (customerDetails?.name || '').trim();
@@ -429,12 +434,20 @@ const createOrder = async (req, res) => {
       }
     }
 
-    // 8. Generate System Identifiers
-    const generatedInvoice =
-      invoiceNumber ||
-      `SAR-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.floor(
-        1000 + Math.random() * 9000
-      )}`;
+    // 8. Generate System Identifiers & Guarantee Unique Invoice
+    let generatedInvoice = (invoiceNumber || '').trim();
+    if (generatedInvoice && isMongoConnected()) {
+      const existingInv = await Order.findOne({ invoiceNumber: generatedInvoice }).lean();
+      if (existingInv) {
+        generatedInvoice = '';
+      }
+    }
+    if (!generatedInvoice) {
+      const datePart = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+      const timePart = Date.now().toString().slice(-4);
+      const randPart = Math.floor(1000 + Math.random() * 9000);
+      generatedInvoice = `SAR-${datePart}-${timePart}${randPart}`;
+    }
 
     const consignmentId =
       courierData?.consignmentId || Math.floor(500000 + Math.random() * 90000);
@@ -543,6 +556,9 @@ const createOrder = async (req, res) => {
  */
 const trackOrder = async (req, res) => {
   try {
+    if (!isMongoConnected()) {
+      await connectDB().catch(() => {});
+    }
     const { invoiceNumber = '', phone = '' } = req.query;
     const inv = invoiceNumber.trim();
     const ph = phone.trim();
@@ -610,6 +626,9 @@ const trackOrder = async (req, res) => {
  */
 const getUserOrders = async (req, res) => {
   try {
+    if (!isMongoConnected()) {
+      await connectDB().catch(() => {});
+    }
     const email = (req.params.email || req.query.email || '').trim().toLowerCase();
     const userId = (req.query.userId || '').trim();
     const phone = (req.query.phone || '').trim();

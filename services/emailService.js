@@ -1,24 +1,23 @@
 const nodemailer = require('nodemailer');
 
 /**
- * Configure Nodemailer Transporter with Gmail App Password or custom SMTP
- * Matches configuration: service: "Gmail", host: "smtp.gmail.com", port: 465, secure: true
+ * Configure Nodemailer Transporter with custom cPanel SMTP hosting
+ * Explicitly configured for port 465 (SSL), host, and credentials without any Google/Gmail fallbacks.
  */
 const getTransporter = () => {
-  const user = (process.env.EMAIL_USER || 'saef.ratul@gmail.com').trim();
-  const rawPass = (process.env.EMAIL_PASS || '').trim();
-  // Strip whitespace from Google App Passwords (e.g. "xnou oveh ebyq bskt" -> "xnouovehebyqbskt")
-  const pass = rawPass.replace(/\s+/g, '');
+  const host = (process.env.EMAIL_HOST || 'orion.snowyserver.com').trim();
+  const port = Number(process.env.EMAIL_PORT) || 465;
+  const user = (process.env.EMAIL_USER || 'support@sarail1to99plus-shop.com').trim();
+  const pass = (process.env.EMAIL_PASS || '').trim();
 
   if (!user || !pass) {
     console.warn('[emailService] Warning: EMAIL_USER or EMAIL_PASS not fully configured in environment.');
   }
 
   return nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || 'Gmail',
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: Number(process.env.EMAIL_PORT) || 465,
-    secure: process.env.EMAIL_SECURE !== 'false',
+    host,
+    port,
+    secure: true,
     auth: {
       user,
       pass,
@@ -30,11 +29,29 @@ const getTransporter = () => {
 };
 
 /**
+ * Shared transporter instance
+ */
+const transporter = getTransporter();
+
+/**
+ * Startup SMTP Connection Verification Callback
+ * Logs whether SMTP connection and authentication are established on boot.
+ */
+if (process.env.NODE_ENV !== 'test') {
+  transporter.verify((error, success) => {
+    if (error) {
+      console.error('[emailService] SMTP connection/authentication failed on boot:', error.message);
+    } else {
+      console.log('[emailService] SMTP connection and authentication successfully established on boot.');
+    }
+  });
+}
+
+/**
  * Verify SMTP Transporter Connection
  */
 const verifyEmailService = async () => {
   try {
-    const transporter = getTransporter();
     await transporter.verify();
     console.log('[emailService] SMTP Transporter successfully connected & authenticated.');
     return { success: true };
@@ -89,7 +106,7 @@ const buildOrderEmailContent = (order, statusType = 'Shipped') => {
   const trackingCode = courierData.trackingCode || '';
   const trackingUrl = courierData.trackingUrl || (trackingCode ? `https://steadfast.com.bd/t/${trackingCode}` : '');
   const supportPhone = process.env.SUPPORT_PHONE || '01998-789157';
-  const storeEmail = process.env.EMAIL_USER || 'sarail1to99plusshop@gmail.com';
+  const storeEmail = (process.env.EMAIL_USER || 'support@sarail1to99plus-shop.com').trim();
   const frontendUrl = process.env.FRONTEND_URL || 'https://sarail1to99plus-shop.com';
   const trackingPageUrl = `${frontendUrl.replace(/\/$/, '')}/track-order?invoice=${encodeURIComponent(invoice)}`;
 
@@ -141,7 +158,7 @@ const buildOrderEmailContent = (order, statusType = 'Shipped') => {
     };
   }
 
-  // Generate Items Table HTML Rows
+  // Generate Items Table HTML Rows (Pure, lightweight semantic HTML without hotlinked media)
   const itemRowsHtml = items
     .map((item, idx) => {
       const title = item.title || 'Product';
@@ -149,22 +166,14 @@ const buildOrderEmailContent = (order, statusType = 'Shipped') => {
       const qty = item.quantity || 1;
       const price = Number(item.price || 0);
       const subtotal = Number(item.subtotal || price * qty);
-      const imageUrl = item.image || 'https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png';
 
       return `
         <tr style="border-bottom: 1px solid #E2E8F0;">
-          <td style="padding: 12px 8px; vertical-align: middle;">
-            <table cellpadding="0" cellspacing="0" border="0">
-              <tr>
-                <td style="width: 52px; vertical-align: middle; padding-right: 12px;">
-                  <img src="${imageUrl}" alt="${title}" width="48" height="48" style="display: block; width: 48px; height: 48px; object-fit: cover; border-radius: 8px; border: 1px solid #E2E8F0;" />
-                </td>
-                <td style="vertical-align: middle;">
-                  <div style="font-size: 13px; font-weight: 700; color: #0F172A; line-height: 1.3;">${title}</div>
-                  <div style="font-size: 11px; color: #64748B; margin-top: 2px;">Variant: <strong style="color: #334155;">${color}</strong></div>
-                </td>
-              </tr>
-            </table>
+          <td style="padding: 12px 10px; vertical-align: middle;">
+            <div style="font-size: 13px; font-weight: 700; color: #0F172A; line-height: 1.35;">${title}</div>
+            <div style="font-size: 11px; color: #64748B; margin-top: 3px;">
+              <span style="display: inline-block; background-color: #F1F5F9; color: #475569; padding: 2px 7px; border-radius: 4px; font-weight: 600;">Variant: ${color}</span>
+            </div>
           </td>
           <td style="padding: 12px 8px; text-align: center; font-size: 13px; font-weight: 600; color: #334155; vertical-align: middle;">
             ${qty}
@@ -235,12 +244,25 @@ const buildOrderEmailContent = (order, statusType = 'Shipped') => {
           <!-- BRAND HEADER -->
           <tr>
             <td style="background: linear-gradient(135deg, #003D73 0%, #002244 100%); padding: 24px; text-align: center; color: #FFFFFF;">
-              <div style="font-size: 22px; font-weight: 900; letter-spacing: -0.5px; line-height: 1.2;">
-                Sarail 1 to 99 Plus Shop
-              </div>
-              <div style="font-size: 12px; color: #93C5FD; margin-top: 4px; font-weight: 500;">
-                Daily Household, Kitchen & Lifestyle Solutions • সরাইল ১ টু ৯৯ প্লাস শপ
-              </div>
+              <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 0 auto;">
+                <tr>
+                  <td align="center" style="padding-bottom: 10px;">
+                    <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                      <img src="${frontendUrl.replace(/\/$/, '')}/logo.png" alt="Sarail 1 to 99 Plus Shop" width="56" height="56" style="display: block; width: 56px; height: 56px; object-fit: contain; border: 0; outline: none; margin: 0 auto;" />
+                    </a>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center">
+                    <div style="font-size: 22px; font-weight: 900; letter-spacing: -0.5px; line-height: 1.2; color: #FFFFFF;">
+                      Sarail 1 to 99 Plus Shop
+                    </div>
+                    <div style="font-size: 12px; color: #93C5FD; margin-top: 4px; font-weight: 500;">
+                      Daily Household, Kitchen &amp; Lifestyle Solutions • সরাইল ১ টু ৯৯ প্লাস শপ
+                    </div>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
@@ -500,8 +522,8 @@ const sendOrderInvoiceEmail = async (order, statusType = 'Shipped') => {
     }
 
     const transporter = getTransporter();
-    const fromName = process.env.EMAIL_FROM_NAME || 'Shop';
-    const fromAddress = process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER || 'sarail1to99plusshop@gmail.com';
+    const fromName = (process.env.EMAIL_FROM_NAME || 'Sarail 1 to 99+ Shop').replace(/^"|"$/g, '').trim();
+    const fromAddress = (process.env.EMAIL_USER || 'support@sarail1to99plus-shop.com').trim();
     const from = `"${fromName}" <${fromAddress}>`;
 
     const { subject, html, text } = buildOrderEmailContent(order, statusType);
