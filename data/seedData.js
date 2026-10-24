@@ -38,7 +38,7 @@ const initialProducts = [
     reviews: 0,
     tag: 'Daily Essential',
     stock: 50,
-    thumbnail: 'https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png',
+    thumbnail: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
     videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
     description:
       'সহজেই কিচেনের যেকোনো পানির কলে সেট করা যায়। পানি পরিষ্কার ও ব্যাকটেরিয়ামুক্ত রাখতে কার্যকর এবং পানির অপচয় রোধ করে।',
@@ -46,7 +46,7 @@ const initialProducts = [
       {
         colorName: 'Standard',
         colorCode: '#3B82F6',
-        images: ['https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png'],
+        images: ['https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -61,14 +61,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Popular',
     stock: 40,
-    thumbnail: 'https://i.ibb.co.com/xSJwWdwQ/Gemini-Generated-Image-vdrcxhvdrcxhvdrc.png',
+    thumbnail: 'https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=600&auto=format&fit=crop&q=80',
     description:
       'উন্নত মানের ওয়াটারপ্রুফ এবং ইজি-টু-ক্লিন ফ্রিজ ম্যাট সেট। ফ্রিজের তাকে দাগ ও ময়লা পড়া থেকে রক্ষা করে এবং পরিষ্কার রাখা সহজ করে।',
     variants: [
       {
         colorName: 'White',
         colorCode: '#FFFFFF',
-        images: ['https://i.ibb.co.com/xSJwWdwQ/Gemini-Generated-Image-vdrcxhvdrcxhvdrc.png'],
+        images: ['https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -83,14 +83,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Hot Deal',
     stock: 35,
-    thumbnail: 'https://i.ibb.co.com/xr6RV9z/Gemini-Generated-Image-afimo4afimo4afim.png',
+    thumbnail: 'https://images.unsplash.com/photo-1585421514284-efb74c2b69ba?w=600&auto=format&fit=crop&q=80',
     description:
       'রান্নাঘরের তেলচিটে ও জেদি ময়লা নিমিষেই পরিষ্কার করতে অত্যন্ত কার্যকরী পাওয়ারফুল ক্লিনার। চুলা, সিঙ্ক ও কিচেন টাইলসের জন্য উপযুক্ত।',
     variants: [
       {
         colorName: 'Standard',
         colorCode: '#F59E0B',
-        images: ['https://i.ibb.co.com/xr6RV9z/Gemini-Generated-Image-afimo4afimo4afim.png'],
+        images: ['https://images.unsplash.com/photo-1585421514284-efb74c2b69ba?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -105,14 +105,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Best Seller',
     stock: 60,
-    thumbnail: 'https://i.ibb.co.com/9mHWNsmy/Gemini-Generated-Image-9mjmi59mjmi59mjm.png',
+    thumbnail: 'https://images.unsplash.com/photo-1584813470613-5b1c1cad3d69?w=600&auto=format&fit=crop&q=80',
     description:
       'কমোডে সুগন্ধি ও দীর্ঘস্থায়ী পরিচ্ছন্নতা বজায় রাখে। প্রতিটি ফ্লাশে জীবাণু ধ্বংস করে এবং দুর্গন্ধ দূর করতে সাহায্য করে।',
     variants: [
       {
         colorName: 'Blue',
         colorCode: '#2563EB',
-        images: ['https://i.ibb.co.com/9mHWNsmy/Gemini-Generated-Image-9mjmi59mjmi59mjm.png'],
+        images: ['https://images.unsplash.com/photo-1584813470613-5b1c1cad3d69?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -127,14 +127,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Discount',
     stock: 25,
-    thumbnail: 'https://i.ibb.co.com/Z1L7hS32/Gemini-Generated-Image-3gqhtl3gqhtl3gqh.png',
+    thumbnail: 'https://images.unsplash.com/photo-1517256064527-09c73fc73e38?w=600&auto=format&fit=crop&q=80',
     description:
       'টেকসই ও আকর্ষণীয় ডিজাইনের ২.২ লিটার ফুড-গ্রেড মেলামাইন পানির জগ। দৈনন্দিন ব্যবহার ও মেহমানদারির জন্য উপযুক্ত।',
     variants: [
       {
         colorName: 'Classic White',
         colorCode: '#F1F5F9',
-        images: ['https://i.ibb.co.com/Z1L7hS32/Gemini-Generated-Image-3gqhtl3gqhtl3gqh.png'],
+        images: ['https://images.unsplash.com/photo-1517256064527-09c73fc73e38?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -149,14 +149,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Trending',
     stock: 20,
-    thumbnail: 'https://i.ibb.co.com/9mHWNsmy/Gemini-Generated-Image-9mjmi59mjmi59mjm.png',
+    thumbnail: 'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=600&auto=format&fit=crop&q=80',
     description:
       'মাথার রক্ত সঞ্চালন বৃদ্ধি ও মানসিক ক্লান্তি দূর করতে স্মার্ট স্কাল্প ম্যাসাজার। চুল পড়া কমাতে ও আরামদায়ক ঘুমের জন্য সহায়ক।',
     variants: [
       {
         colorName: 'White',
         colorCode: '#FFFFFF',
-        images: ['https://i.ibb.co.com/9mHWNsmy/Gemini-Generated-Image-9mjmi59mjmi59mjm.png'],
+        images: ['https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -171,14 +171,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Top Rated',
     stock: 45,
-    thumbnail: 'https://i.ibb.co.com/KjhszVFt/Gemini-Generated-Image-nm9icunm9icunm9i.png',
+    thumbnail: 'https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=600&auto=format&fit=crop&q=80',
     description:
       'মুখের ফোলাভাব দূর করতে এবং ত্বক টানটান ও উজ্জ্বল রাখতে সিলিকন আইস ফেস রোলার। ব্রণ ও ডার্ক সার্কেল কমাতে সহায়ক।',
     variants: [
       {
         colorName: 'Pink',
         colorCode: '#F472B6',
-        images: ['https://i.ibb.co.com/KjhszVFt/Gemini-Generated-Image-nm9icunm9icunm9i.png'],
+        images: ['https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -193,14 +193,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Special Offer',
     stock: 80,
-    thumbnail: 'https://i.ibb.co.com/mVKVQ7wS/Gemini-Generated-Image-tlbwc1tlbwc1tlbw.png',
+    thumbnail: 'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=600&auto=format&fit=crop&q=80',
     description:
       'উচ্চমানের ফুড-গ্রেড মেলামাইন দিয়ে তৈরি ৯ ইঞ্চি ডীপ স্যুপ প্লেট। দীর্ঘস্থায়ী, সহজে ভাঙে না এবং পরিষ্কার করা অত্যন্ত সহজ।',
     variants: [
       {
         colorName: 'White',
         colorCode: '#F8FAFC',
-        images: ['https://i.ibb.co.com/mVKVQ7wS/Gemini-Generated-Image-tlbwc1tlbwc1tlbw.png'],
+        images: ['https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -215,14 +215,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Best Seller',
     stock: 65,
-    thumbnail: 'https://i.ibb.co.com/3Y1vdrdt/Gemini-Generated-Image-r9a8emr9a8emr9a8.png',
+    thumbnail: 'https://images.unsplash.com/photo-1515488042361-ee00e0ddd4e4?w=600&auto=format&fit=crop&q=80',
     description:
       'বাচ্চারা যখন হাঁটু গেড়ে হামাগুড়ি দেয় তখন হাঁটুকে মেঝেতে ঘষা ও আঘাত থেকে বাঁচাতে সফট ও কমফোর্টেবল অ্যান্টি-স্লিপ নি প্যড মোজা।',
     variants: [
       {
         colorName: 'Rosy Brown',
         colorCode: '#D39F9C',
-        images: ['https://i.ibb.co.com/3Y1vdrdt/Gemini-Generated-Image-r9a8emr9a8emr9a8.png'],
+        images: ['https://images.unsplash.com/photo-1515488042361-ee00e0ddd4e4?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -237,14 +237,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Best Seller',
     stock: 40,
-    thumbnail: 'https://i.ibb.co.com/mVKVQ7wS/Gemini-Generated-Image-tlbwc1tlbwc1tlbw.png',
+    thumbnail: 'https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?w=600&auto=format&fit=crop&q=80',
     description:
       '১০০% ফুড-গ্রেড হেভি ওয়েট মেলামাইন ডিনার প্লেট সেট। আকর্ষণীয় ফ্লোরাল প্রিন্ট ও তাপ নিরোধক হওয়ায় প্রতিদিনের ব্যবহার ও অতিথি আপ্যায়নে সেরা।',
     variants: [
       {
         colorName: 'Floral White',
         colorCode: '#F8FAFC',
-        images: ['https://i.ibb.co.com/mVKVQ7wS/Gemini-Generated-Image-tlbwc1tlbwc1tlbw.png'],
+        images: ['https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -259,14 +259,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Daily Essential',
     stock: 55,
-    thumbnail: 'https://i.ibb.co.com/xr6RV9z/Gemini-Generated-Image-afimo4afimo4afim.png',
+    thumbnail: 'https://images.unsplash.com/photo-1585837575652-267c041d77d4?w=600&auto=format&fit=crop&q=80',
     description:
       'হাতের ত্বক সুরক্ষিত রেখে থালা-বাসন, ফলমূল ও কিচেন সিঙ্ক পরিষ্কার করার জন্য নরম ব্রিসলযুক্ত হিট-রেজিস্ট্যান্ট সিলিকন গ্লাভস।',
     variants: [
       {
         colorName: 'Aqua Blue',
         colorCode: '#06B6D4',
-        images: ['https://i.ibb.co.com/xr6RV9z/Gemini-Generated-Image-afimo4afimo4afim.png'],
+        images: ['https://images.unsplash.com/photo-1585837575652-267c041d77d4?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -281,14 +281,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Popular',
     stock: 45,
-    thumbnail: 'https://i.ibb.co.com/3Y1vdrdt/Gemini-Generated-Image-r9a8emr9a8emr9a8.png',
+    thumbnail: 'https://images.unsplash.com/photo-1587654780291-39c9404d746b?w=600&auto=format&fit=crop&q=80',
     description:
       'শিশুদের মেধা বিকাশ ও খেলার ছলে অক্ষর এবং সংখ্যা শেখার জন্য নিরাপদ রঙের প্রিমিয়াম কাঠের এডুকেশনাল পাজল বোর্ড।',
     variants: [
       {
         colorName: 'Multicolor',
         colorCode: '#F59E0B',
-        images: ['https://i.ibb.co.com/3Y1vdrdt/Gemini-Generated-Image-r9a8emr9a8emr9a8.png'],
+        images: ['https://images.unsplash.com/photo-1587654780291-39c9404d746b?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -303,14 +303,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Trending',
     stock: 70,
-    thumbnail: 'https://i.ibb.co.com/xSJwWdwQ/Gemini-Generated-Image-vdrcxhvdrcxhvdrc.png',
+    thumbnail: 'https://images.unsplash.com/photo-1595515106969-1ce29566ff1c?w=600&auto=format&fit=crop&q=80',
     description:
       'ড্রিল ছাড়াই দেয়ালে সহজে লাগানো যায় এমন শক্তিশালী অ্যাডহেসিভ স্টোরেজ র‍্যাক। বাথরুম, রান্নাঘর ও ড্রেসিং রুম গুছিয়ে রাখতে অত্যন্ত কার্যকর।',
     variants: [
       {
         colorName: 'Matte White',
         colorCode: '#F1F5F9',
-        images: ['https://i.ibb.co.com/xSJwWdwQ/Gemini-Generated-Image-vdrcxhvdrcxhvdrc.png'],
+        images: ['https://images.unsplash.com/photo-1595515106969-1ce29566ff1c?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -325,14 +325,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Top Rated',
     stock: 90,
-    thumbnail: 'https://i.ibb.co.com/KjhszVFt/Gemini-Generated-Image-nm9icunm9icunm9i.png',
+    thumbnail: 'https://images.unsplash.com/photo-1535295972055-1c762f4483e5?w=600&auto=format&fit=crop&q=80',
     description:
       'আধুনিক ও মার্জিত ডিজাইনের মুক্তা এবং ক্রিস্টাল খচিত প্রিমিয়াম হেয়ার ক্লিপ সেট। যেকোনো পার্টি বা প্রতিদিনের ফ্যাশনের জন্য মানানসই।',
     variants: [
       {
         colorName: 'Pearl Gold',
         colorCode: '#FBBF24',
-        images: ['https://i.ibb.co.com/KjhszVFt/Gemini-Generated-Image-nm9icunm9icunm9i.png'],
+        images: ['https://images.unsplash.com/photo-1535295972055-1c762f4483e5?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -347,14 +347,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Hot Deal',
     stock: 38,
-    thumbnail: 'https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png',
+    thumbnail: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&auto=format&fit=crop&q=80',
     description:
       'রান্নার তেল পরিমিত ও ঝামেলাহীনভাবে ঢালার জন্য ড্রিপ-ফ্রি নজলযুক্ত প্রিমিয়াম ফুড-গ্রেড অয়েল ডিসপেনসার বোতল।',
     variants: [
       {
         colorName: 'Silver',
         colorCode: '#94A3B8',
-        images: ['https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png'],
+        images: ['https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -369,14 +369,14 @@ const initialProducts = [
     reviews: 0,
     tag: 'Special Offer',
     stock: 30,
-    thumbnail: 'https://i.ibb.co.com/Z1L7hS32/Gemini-Generated-Image-3gqhtl3gqhtl3gqh.png',
+    thumbnail: 'https://images.unsplash.com/photo-1541544741938-0af808871cc0?w=600&auto=format&fit=crop&q=80',
     description:
       'খাবার গরম ও সতেজ রাখতে এয়ার-টাইট ঢাকনাসহ ৩টি ভিন্ন সাইজের মেলামাইন সার্ভিং বোল সেট।',
     variants: [
       {
         colorName: 'Ivory White',
         colorCode: '#F8FAFC',
-        images: ['https://i.ibb.co.com/Z1L7hS32/Gemini-Generated-Image-3gqhtl3gqhtl3gqh.png'],
+        images: ['https://images.unsplash.com/photo-1541544741938-0af808871cc0?w=600&auto=format&fit=crop&q=80'],
       },
     ],
   },
@@ -412,7 +412,7 @@ const initialOrders = [
         quantity: 2,
         color: 'Standard',
         colorCode: '#3B82F6',
-        image: 'https://i.ibb.co.com/q3kcHV8G/Gemini-Generated-Image-yw9arcyw9arcyw9a.png',
+        image: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
         category: 'kitchen',
         subtotal: 300,
       },
@@ -423,7 +423,7 @@ const initialOrders = [
         quantity: 1,
         color: 'Standard',
         colorCode: '#F59E0B',
-        image: 'https://i.ibb.co.com/xr6RV9z/Gemini-Generated-Image-afimo4afimo4afim.png',
+        image: 'https://images.unsplash.com/photo-1585421514284-efb74c2b69ba?w=600&auto=format&fit=crop&q=80',
         category: 'cleaning',
         subtotal: 280,
       },
