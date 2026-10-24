@@ -56,9 +56,12 @@ const getProductReviews = async (req, res) => {
     }
 
     if (isMongoConnected()) {
-      const reviews = await Review.find({ productId })
+      const rawReviews = await Review.find({ productId })
         .sort({ createdAt: -1 })
         .lean();
+
+      // Sanitize: never leak customer email addresses in public reviews API
+      const reviews = rawReviews.map(({ userEmail, ...safeReview }) => safeReview);
 
       const { averageRating, totalReviews, ratingBreakdown } =
         computeRatingStats(reviews);
@@ -73,9 +76,11 @@ const getProductReviews = async (req, res) => {
       });
     }
 
-    const reviews = memoryStore.reviews
+    const rawReviews = memoryStore.reviews
       .filter((r) => Number(r.productId) === productId)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    const reviews = rawReviews.map(({ userEmail, ...safeReview }) => safeReview);
 
     const { averageRating, totalReviews, ratingBreakdown } =
       computeRatingStats(reviews);

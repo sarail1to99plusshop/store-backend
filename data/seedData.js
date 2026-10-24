@@ -39,7 +39,7 @@ const initialProducts = [
     tag: 'Daily Essential',
     stock: 50,
     thumbnail: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    videoUrl: '',
     description:
       'সহজেই কিচেনের যেকোনো পানির কলে সেট করা যায়। পানি পরিষ্কার ও ব্যাকটেরিয়ামুক্ত রাখতে কার্যকর এবং পানির অপচয় রোধ করে।',
     variants: [
@@ -390,60 +390,9 @@ const initialProducts = [
   },
 }));
 
-// No pre-seeded reviews — reviews and ratings are 100% dynamically created by users
+// No pre-seeded reviews or dummy orders — all data is 100% genuine and placed by actual customers
 const initialReviews = [];
-
-const initialOrders = [
-  {
-    invoiceNumber: 'SAR-261003-3994',
-    customerDetails: {
-      name: 'Md. Al Saef Ratul',
-      email: 'saef.ratul@gmail.com',
-      phone: '01867781018',
-      address: 'Dhaka, Narsingdi',
-      note: 'Please call before arrival',
-      deliveryLocation: 'Inside Dhaka',
-    },
-    items: [
-      {
-        productId: 1,
-        title: 'ট্যাপ ওয়াটার ফিল্টার - 360° রোটেটিং কিচেন কল ফিল্টার',
-        price: 150,
-        quantity: 2,
-        color: 'Standard',
-        colorCode: '#3B82F6',
-        image: 'https://images.unsplash.com/photo-1584992236310-6edddc08acff?w=600&auto=format&fit=crop&q=80',
-        category: 'kitchen',
-        subtotal: 300,
-      },
-      {
-        productId: 3,
-        title: 'হেভি ডিউটি কিচেন ক্লিনার স্প্রে - অয়েল ও গ্রীস রিমুভার',
-        price: 280,
-        quantity: 1,
-        color: 'Standard',
-        colorCode: '#F59E0B',
-        image: 'https://images.unsplash.com/photo-1585421514284-efb74c2b69ba?w=600&auto=format&fit=crop&q=80',
-        category: 'cleaning',
-        subtotal: 280,
-      },
-    ],
-    deliveryFee: 60,
-    itemsSubtotal: 580,
-    totalAmount: 640,
-    totalQuantity: 3,
-    paymentMethod: 'COD',
-    orderStatus: 'Pending',
-    courierData: {
-      provider: 'Steadfast',
-      consignmentId: 521307,
-      trackingCode: 'SF19970475',
-      trackingUrl: 'https://steadfast.com.bd/t/SF19970475',
-      shippedAt: new Date('2026-10-03T23:14:20.892Z'),
-    },
-    createdAt: new Date('2026-10-03T21:52:51.798Z'),
-  },
-];
+const initialOrders = [];
 
 // Fallback in-memory store used seamlessly when MongoDB URI is not yet connected
 const memoryStore = {
