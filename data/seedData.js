@@ -11,18 +11,28 @@ const initialCategories = [
 
 const initialDeliveryCharges = [
   {
-    id: 'inside-dhaka',
-    location: 'Inside Dhaka',
+    id: 'inside-brahmanbaria',
+    location: 'Inside brahmanbaria',
     charge: 60,
     estimatedDays: '1-2 Business Days',
     isDefault: true,
+    isActive: true,
   },
   {
-    id: 'outside-dhaka',
-    location: 'Outside Dhaka',
-    charge: 120,
+    id: 'outside-brahmanbaria',
+    location: 'Outside brahmanbaria',
+    charge: 130,
     estimatedDays: '2-4 Business Days',
     isDefault: false,
+    isActive: true,
+  },
+  {
+    id: 'inside-dhaka',
+    location: 'Inside dhaka',
+    charge: 120,
+    estimatedDays: '1-3 Business Days',
+    isDefault: false,
+    isActive: true,
   },
 ];
 
@@ -33,6 +43,8 @@ const initialProducts = [];
 const initialReviews = [];
 const initialOrders = [];
 
+const { BANGLADESH_DISTRICTS } = require('./bangladeshDistricts');
+
 // Fallback in-memory store used seamlessly when MongoDB URI is not yet connected
 const memoryStore = {
   users: [],
@@ -40,6 +52,7 @@ const memoryStore = {
   reviews: initialReviews.map((r) => ({ ...r })),
   categories: initialCategories.map((c) => ({ ...c })),
   deliveryCharges: initialDeliveryCharges.map((d) => ({ ...d })),
+  districts: BANGLADESH_DISTRICTS.map((d) => ({ ...d })),
   orders: initialOrders.map((o) => ({ ...o })),
   preOrders: [],
 };

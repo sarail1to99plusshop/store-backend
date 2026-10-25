@@ -7,6 +7,10 @@ const { connectDB, isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 const { sendOrderCancelledEmail } = require('../services/emailService');
 const { createSteadfastConsignment } = require('../services/steadfastService');
+const {
+  isZoneApplicableForDistrict,
+  getBestMatchingDeliveryZone,
+} = require('../utils/deliveryZoneRules');
 
 // Allowed server-side delivery fee dictionary
 const SERVER_DELIVERY_FEES = {
@@ -134,6 +138,37 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // Verify district is not disabled by admin
+    if (rawDistrict) {
+      let isDistrictDisabled = false;
+      if (isMongoConnected()) {
+        try {
+          const District = require('../models/District');
+          const dDoc = await District.findOne({ name: new RegExp(`^${rawDistrict}$`, 'i') }).lean();
+          if (dDoc && dDoc.isActive === false) {
+            isDistrictDisabled = true;
+          }
+        } catch {
+          // ignore error
+        }
+      }
+      if (!isDistrictDisabled && Array.isArray(memoryStore.districts)) {
+        const dMem = memoryStore.districts.find(
+          (d) => d.name.toLowerCase() === rawDistrict.toLowerCase()
+        );
+        if (dMem && dMem.isActive === false) {
+          isDistrictDisabled = true;
+        }
+      }
+
+      if (isDistrictDisabled) {
+        return res.status(400).json({
+          success: false,
+          message: `"${rawDistrict}" জেলায় আমাদের হোম ডেলিভারি সাময়িকভাবে বন্ধ রয়েছে। অনুগ্রহ করে অন্য ঠিকানা প্রদান করুন।`,
+        });
+      }
+    }
+
     // 2. Extract Raw Ordered Items
     const rawItems = Array.isArray(items) && items.length > 0 ? items : orderItems;
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
@@ -194,7 +229,7 @@ const createOrder = async (req, res) => {
       }
     }
 
-    // 4. Delivery Zone Fee Validation
+    // 4. Delivery Zone Fee Validation & Strict District Geographic Enforcement
     let activeCharges = Array.isArray(memoryStore.deliveryCharges) ? memoryStore.deliveryCharges : [];
     if (isMongoConnected()) {
       try {
@@ -207,12 +242,25 @@ const createOrder = async (req, res) => {
       }
     }
 
+    const customerDistrict = (customerDetails.district || '').trim();
     const rawDeliveryZone = (customerDetails.deliveryLocation || '').trim();
-    const matchedZone = activeCharges.find(
+    let matchedZone = activeCharges.find(
       (c) =>
         c.location?.toLowerCase() === rawDeliveryZone.toLowerCase() ||
         c.id?.toLowerCase() === rawDeliveryZone.toLowerCase()
     );
+
+    // If customer selected a district (e.g. Narsingdi) but submitted an incompatible zone (e.g. "Inside brahmanbaria"),
+    // enforce geographic integrity and adjust to the valid zone (e.g. "Outside brahmanbaria").
+    if (customerDistrict) {
+      if (!matchedZone || !isZoneApplicableForDistrict(matchedZone, customerDistrict)) {
+        const validZone = getBestMatchingDeliveryZone(activeCharges, customerDistrict);
+        if (validZone) {
+          matchedZone = validZone;
+          customerDetails.deliveryLocation = validZone.location;
+        }
+      }
+    }
 
     let validatedDeliveryFee = matchedZone
       ? matchedZone.charge
@@ -220,7 +268,8 @@ const createOrder = async (req, res) => {
 
     if (req.body.deliveryFee !== undefined && !isNaN(Number(req.body.deliveryFee))) {
       const clientFee = Number(req.body.deliveryFee);
-      if (activeCharges.some((c) => c.charge === clientFee) || clientFee === validatedDeliveryFee) {
+      // Only allow client fee override if it matches the validated compatible fee
+      if (clientFee === validatedDeliveryFee) {
         validatedDeliveryFee = clientFee;
       }
     }

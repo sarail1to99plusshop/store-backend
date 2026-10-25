@@ -6,6 +6,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const { connectDB, isMongoConnected } = require('./config/db');
 const { getDeliveryCharges } = require('./controllers/categoryController');
 const { createPreOrder } = require('./controllers/orderController');
+const { getDistricts } = require('./controllers/locationController');
 
 const userRoutes = require('./routes/userRoutes');
 const productRoutes = require('./routes/productRoutes');
@@ -14,6 +15,7 @@ const categoryRoutes = require('./routes/categoryRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const courierRoutes = require('./routes/courierRoutes');
+const locationRoutes = require('./routes/locationRoutes');
 
 const app = express();
 
@@ -114,6 +116,8 @@ app.get('/', (req, res) => {
       productReviews: '/api/products/:id/reviews',
       categories: '/api/categories',
       deliveryCharges: '/api/delivery-charges',
+      districts: '/api/locations/districts',
+      divisions: '/api/locations/divisions',
       registerUser: 'POST /api/users/register',
       loginUser: 'PATCH /api/users/login',
       orders: '/api/orders',
@@ -140,9 +144,11 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/courier', courierRoutes);
+app.use('/api/locations', locationRoutes);
 
 // Convenience top-level endpoints
 app.get('/api/delivery-charges', getDeliveryCharges);
+app.get('/api/districts', getDistricts);
 app.post('/api/pre-orders', createPreOrder);
 
 // 404 Handler

@@ -38,6 +38,10 @@ const {
   updateDeliveryChargeAdmin,
   deleteDeliveryChargeAdmin,
 } = require('../controllers/deliveryController');
+const {
+  getAllDistrictsAdmin,
+  updateDistrictStatusAdmin,
+} = require('../controllers/locationController');
 const { verifyAdmin } = require('../middleware/authMiddleware');
 
 // Public route: Admin login
@@ -57,6 +61,10 @@ router.post('/delivery-charges', createDeliveryChargeAdmin);
 router.put('/delivery-charges/:id', updateDeliveryChargeAdmin);
 router.patch('/delivery-charges/:id', updateDeliveryChargeAdmin);
 router.delete('/delivery-charges/:id', deleteDeliveryChargeAdmin);
+
+// District Status Management (Enable / Disable Bangladesh 64 Districts)
+router.get('/districts', getAllDistrictsAdmin);
+router.patch('/districts/:id/status', updateDistrictStatusAdmin);
 
 // System Status (Active / Disconnect MongoDB check)
 router.get('/system-status', getSystemStatus);
