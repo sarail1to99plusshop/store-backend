@@ -878,6 +878,71 @@ describe('Backend Comprehensive Integrity Suite', () => {
       }
     });
 
+    test('Brahmanbaria Customer flexibility: customer can choose "Without Brahmanbaria City" (৳130) as well as "Inside Brahmanbaria City" (৳60)', async () => {
+      const origCharges = [...memoryStore.deliveryCharges];
+      memoryStore.deliveryCharges = [
+        { id: 'inside-brahmanbaria', location: 'Inside Brahmanbaria City', charge: 60, isDefault: true, isActive: true },
+        { id: 'without-brahmanbaria-city', location: 'Without Brahmanbaria City (Rest of Bangladesh)', charge: 130, isDefault: false, isActive: true },
+        { id: 'inside-dhaka', location: 'Inside Dhaka City', charge: 120, isDefault: false, isActive: true },
+      ];
+
+      try {
+        // 1. Brahmanbaria customer selecting Without Brahmanbaria City (৳130)
+        const { req: req1, res: res1, getStatus: getStatus1, getData: getData1 } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Sarail Upazila Customer',
+              phone: '01812345678',
+              division: 'Chattogram',
+              district: 'Brahmanbaria',
+              thana: 'Sarail',
+              streetAddress: 'Bikal Bazar, Sarail Upazila, Beside High School',
+              address: 'Bikal Bazar, Sarail Upazila, Beside High School, Sarail, Brahmanbaria',
+              deliveryLocation: 'Without Brahmanbaria City (Rest of Bangladesh)',
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 130,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+
+        await createOrder(req1, res1);
+        assert.equal(getStatus1(), 201);
+        assert.equal(getData1().success, true);
+        assert.equal(getData1().order.deliveryFee, 130);
+        assert.equal(getData1().order.totalAmount, getData1().order.itemsSubtotal + 130);
+        assert.ok(getData1().order.customerDetails.deliveryLocation.includes('Without Brahmanbaria'));
+
+        // 2. Brahmanbaria customer selecting Inside Brahmanbaria City (৳60)
+        const { req: req2, res: res2, getStatus: getStatus2, getData: getData2 } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Brahmanbaria Sadar Customer',
+              phone: '01812345679',
+              division: 'Chattogram',
+              district: 'Brahmanbaria',
+              thana: 'Brahmanbaria Sadar',
+              streetAddress: 'Court Road, Sadar City, Brahmanbaria',
+              address: 'Court Road, Sadar City, Brahmanbaria',
+              deliveryLocation: 'Inside Brahmanbaria City',
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 60,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+
+        await createOrder(req2, res2);
+        assert.equal(getStatus2(), 201);
+        assert.equal(getData2().success, true);
+        assert.equal(getData2().order.deliveryFee, 60);
+        assert.equal(getData2().order.totalAmount, getData2().order.itemsSubtotal + 60);
+        assert.ok(getData2().order.customerDetails.deliveryLocation.includes('Inside Brahmanbaria'));
+      } finally {
+        memoryStore.deliveryCharges = origCharges;
+      }
+    });
+
     test('getAllDistrictsAdmin returns all 64 districts with totalActive and totalDisabled', async () => {
       const { req, res, getStatus, getData } = mockReqRes();
       await getAllDistrictsAdmin(req, res);

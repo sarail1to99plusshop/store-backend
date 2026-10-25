@@ -27,8 +27,8 @@ const initialDeliveryCharges = [
     isActive: true,
   },
   {
-    id: 'outside-dhaka-brahmanbaria',
-    location: 'Outside Dhaka and Brahmanbaria (Rest of Bangladesh)',
+    id: 'without-brahmanbaria-city',
+    location: 'Without Brahmanbaria City (Rest of Bangladesh)',
     charge: 130,
     estimatedDays: '2-4 Business Days',
     isDefault: false,
