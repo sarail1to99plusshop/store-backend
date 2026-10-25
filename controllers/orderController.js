@@ -261,21 +261,35 @@ const createOrder = async (req, res) => {
       (c) =>
         c.location?.toLowerCase() === rawDeliveryZone.toLowerCase() ||
         c.id?.toLowerCase() === rawDeliveryZone.toLowerCase() ||
-        (rawDeliveryZone.toLowerCase().includes('outside') && (c.id?.includes('outside') || c.location?.toLowerCase().includes('outside')))
+        ((rawDeliveryZone.toLowerCase().includes('outside') || rawDeliveryZone.toLowerCase().includes('without')) &&
+          (c.id?.includes('without') || c.id?.includes('outside') || c.location?.toLowerCase().includes('without') || c.location?.toLowerCase().includes('outside')))
     );
+
+    // If no explicit delivery location was matched, check if client provided deliveryFee
+    // and verify if that fee corresponds to an active, geographically valid zone for this district
+    if (!matchedZone && req.body.deliveryFee !== undefined && !isNaN(Number(req.body.deliveryFee))) {
+      const candidateFee = Number(req.body.deliveryFee);
+      const feeMatchedZone = activeCharges.find(
+        (c) => c.charge === candidateFee && isZoneApplicableForDistrict(c, customerDistrict, activeCharges)
+      );
+      if (feeMatchedZone) {
+        matchedZone = feeMatchedZone;
+        customerDetails.deliveryLocation = feeMatchedZone.location;
+      }
+    }
 
     // If customer selected a district (e.g. Narsingdi) but submitted an incompatible zone (e.g. "Inside Brahmanbaria City"),
     // or if no zone was specified, enforce geographic integrity and select the valid zone.
     if (customerDistrict) {
       if (!matchedZone || !isZoneApplicableForDistrict(matchedZone, customerDistrict, activeCharges)) {
-        const validZone = getBestMatchingDeliveryZone(activeCharges, customerDistrict);
+        const validZone = getBestMatchingDeliveryZone(activeCharges, customerDistrict, rawThana);
         if (validZone) {
           matchedZone = validZone;
           customerDetails.deliveryLocation = validZone.location;
         }
       }
     } else if (!matchedZone) {
-      matchedZone = getBestMatchingDeliveryZone(activeCharges, '');
+      matchedZone = getBestMatchingDeliveryZone(activeCharges, '', rawThana);
       if (matchedZone) {
         customerDetails.deliveryLocation = matchedZone.location;
       }

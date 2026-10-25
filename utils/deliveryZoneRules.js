@@ -21,10 +21,13 @@ const getTargetDistrictForZone = (zone) => {
   const loc = (zone.location || '').toLowerCase();
   const id = (zone.id || '').toLowerCase();
 
-  // If explicitly labeled as "outside" or nationwide, it is not an inside local rate
+  // If explicitly labeled as "outside", "without", or nationwide, it is not an inside local rate
   if (
     loc.includes('outside') ||
+    loc.includes('without') ||
     loc.includes('আউটসাইড') ||
+    loc.includes('বাইরে') ||
+    loc.includes('ছাড়া') ||
     loc.includes('সারা দেশ') ||
     loc.includes('সারাদেশ') ||
     loc.includes('all bangladesh') ||
@@ -92,51 +95,35 @@ const isZoneApplicableForDistrict = (zone, district, allZones = []) => {
   const targetDistrict = getTargetDistrictForZone(zone);
 
   if (targetDistrict) {
-    // This is a local "Inside [District]" zone.
-    // It is ONLY valid if the customer's district exactly matches the target district!
+    // This is a local "Inside [District] City" zone (e.g. Inside Brahmanbaria City or Inside Dhaka City).
+    // It is ONLY valid if the customer's district matches the target district!
     return normalizedDistrict === targetDistrict.toLowerCase();
   }
 
-  // This is an "outside / non-local" zone.
-  const loc = (zone.location || '').toLowerCase();
-  if (loc.includes('outside') || loc.includes('আউটসাইড')) {
-    // If the customer district has a dedicated inside zone among available zones (e.g. Inside dhaka),
-    // then the general outside zone is not applicable for this district.
-    if (Array.isArray(allZones) && allZones.length > 0) {
-      const hasDedicatedInsideZone = allZones.some(
-        (z) => z.isActive !== false && getTargetDistrictForZone(z)?.toLowerCase() === normalizedDistrict
-      );
-      if (hasDedicatedInsideZone) {
-        return false;
-      }
-    }
-
-    if (loc.includes('brahmanbaria') || loc.includes('ব্রাহ্মণবাড়িয়া')) {
-      // "Outside Brahmanbaria" is valid for all districts EXCEPT Brahmanbaria itself!
-      return normalizedDistrict !== 'brahmanbaria';
-    }
-    if (loc.includes('dhaka') || loc.includes('ঢাকা')) {
-      // "Outside Dhaka" is valid for all districts EXCEPT Dhaka city/district itself!
-      return normalizedDistrict !== 'dhaka';
-    }
-  }
-
-  // Standard nationwide rate applies everywhere
+  // This is a "Without City / Outside / Rest of Bangladesh" zone (130 BDT).
+  // It is valid across all 64 districts of Bangladesh:
+  // - In Brahmanbaria: for customers living without/outside Brahmanbaria City (e.g. Sarail, Kasba, Nabinagar, etc.)
+  // - In Dhaka: for customers living outside Dhaka City Corporation (e.g. Dhamrai, Dohar, Nawabganj, etc.)
+  // - Everywhere else: standard nationwide courier rate
   return true;
 };
 
 /**
- * Select the optimal, geographically-valid delivery zone for the customer's district.
+ * Select the optimal, geographically-valid delivery zone for the customer's district and thana.
  * 
  * @param {Array} zones - Array of delivery charge objects
  * @param {string} district - Selected district
+ * @param {string} [thana] - Selected thana/upazila (optional for granular matching)
  * @returns {object|null} - Best matching delivery zone
  */
-const getBestMatchingDeliveryZone = (zones, district) => {
+const getBestMatchingDeliveryZone = (zones, district, thana = '') => {
   if (!Array.isArray(zones) || zones.length === 0) return null;
   if (!district || typeof district !== 'string' || !district.trim()) {
     return zones.find((z) => z.isDefault && z.isActive !== false) || zones[0];
   }
+
+  const normalizedDistrict = district.trim().toLowerCase();
+  const normalizedThana = (thana || '').trim().toLowerCase();
 
   const applicable = zones.filter(
     (z) => z.isActive !== false && isZoneApplicableForDistrict(z, district, zones)
@@ -146,8 +133,23 @@ const getBestMatchingDeliveryZone = (zones, district) => {
     return zones.find((z) => z.isDefault && z.isActive !== false) || zones[0];
   }
 
-  // 1. If customer is in Brahmanbaria, prioritize Brahmanbaria local zone (60 BDT)
-  if (district.trim().toLowerCase() === 'brahmanbaria') {
+  // 1. Brahmanbaria District:
+  if (normalizedDistrict === 'brahmanbaria') {
+    // If thana explicitly indicates outside city (e.g. Sarail, Ashuganj, Kasba, Nabinagar, etc.)
+    const isOutsideCityThana = [
+      'sarail', 'ashuganj', 'kasba', 'nabinagar', 'bancharampur',
+      'nasirnagar', 'akhaura', 'bijoynagar', 'সরাইল', 'আশুগঞ্জ', 'কসবা', 'নবীনগর'
+    ].some((t) => normalizedThana.includes(t));
+
+    if (isOutsideCityThana) {
+      // Prioritize the "Without Brahmanbaria City" zone (130 BDT)
+      const withoutCityMatch = applicable.find(
+        (z) => z.charge === 130 || z.id?.includes('without') || z.id?.includes('outside')
+      );
+      if (withoutCityMatch) return withoutCityMatch;
+    }
+
+    // Default for Brahmanbaria (or if Sadar/City) is Inside Brahmanbaria City (60 BDT)
     const bbMatch = applicable.find(
       (z) =>
         getTargetDistrictForZone(z)?.toLowerCase() === 'brahmanbaria' ||
@@ -157,8 +159,19 @@ const getBestMatchingDeliveryZone = (zones, district) => {
     if (bbMatch) return bbMatch;
   }
 
-  // 2. If customer is in Dhaka, prioritize Dhaka city zone (120 BDT)
-  if (district.trim().toLowerCase() === 'dhaka') {
+  // 2. Dhaka District:
+  if (normalizedDistrict === 'dhaka') {
+    const isOutsideDhakaThana = [
+      'dhamrai', 'dohar', 'nawabganj', 'কেরানীগঞ্জ', 'ধামরাই', 'দোহার', 'নবাবগঞ্জ'
+    ].some((t) => normalizedThana.includes(t));
+
+    if (isOutsideDhakaThana) {
+      const withoutDhakaMatch = applicable.find(
+        (z) => z.charge === 130 || z.id?.includes('without') || z.id?.includes('outside')
+      );
+      if (withoutDhakaMatch) return withoutDhakaMatch;
+    }
+
     const dhakaMatch = applicable.find(
       (z) =>
         getTargetDistrictForZone(z)?.toLowerCase() === 'dhaka' ||
@@ -168,14 +181,16 @@ const getBestMatchingDeliveryZone = (zones, district) => {
     if (dhakaMatch) return dhakaMatch;
   }
 
-  // 3. For all other 62 districts (Outside Dhaka & Brahmanbaria / Rest of Bangladesh), prioritize outside zone (130 BDT)
+  // 3. For all other 62 districts (Rest of Bangladesh):
   const outsideMatch = applicable.find((z) => {
     const loc = (z.location || '').toLowerCase();
     const id = (z.id || '').toLowerCase();
     return (
+      loc.includes('without') ||
       loc.includes('outside') ||
       loc.includes('rest of') ||
       loc.includes('আউটসাইড') ||
+      id.includes('without') ||
       id.includes('outside') ||
       z.charge === 130
     );
