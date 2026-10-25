@@ -226,6 +226,66 @@ const getSystemStatus = async (req, res) => {
   }
 };
 
+const isInvalidProductImage = (url) => {
+  if (!url || typeof url !== 'string') return true;
+  const lower = url.trim().toLowerCase();
+  return (
+    lower === '' ||
+    lower === 'undefined' ||
+    lower === 'null' ||
+    lower.includes('without-bg') ||
+    lower.includes('without bg') ||
+    lower.includes('/logo.png') ||
+    lower.endsWith('logo.png') ||
+    lower.endsWith('logo.webp') ||
+    lower.includes('website logo') ||
+    lower.includes('product-placeholder')
+  );
+};
+
+const sanitizeProductItem = (p) => {
+  if (!p) return p;
+  const rawThumbnail = (p.thumbnail || '').trim();
+  const validThumbnail = !isInvalidProductImage(rawThumbnail) ? rawThumbnail : '';
+  const rawImages = Array.isArray(p.images)
+    ? p.images.filter((img) => !isInvalidProductImage(img))
+    : [];
+
+  let fallbackFromVariant = '';
+  if (Array.isArray(p.variants)) {
+    for (const v of p.variants) {
+      if (Array.isArray(v?.images)) {
+        const found = v.images.find((img) => !isInvalidProductImage(img));
+        if (found) {
+          fallbackFromVariant = found;
+          break;
+        }
+      }
+    }
+  }
+
+  const thumbnail = validThumbnail || rawImages[0] || fallbackFromVariant || '';
+  const variants = Array.isArray(p.variants) && p.variants.length > 0
+    ? p.variants.map((v) => ({
+        ...v,
+        images: Array.isArray(v?.images)
+          ? v.images.filter((img) => !isInvalidProductImage(img))
+          : [thumbnail].filter(Boolean),
+      }))
+    : [{ colorName: 'Standard', colorCode: '#000000', images: [thumbnail].filter(Boolean) }];
+
+  const images = rawImages.length > 0
+    ? (thumbnail ? [thumbnail, ...rawImages.filter((img) => img !== thumbnail)] : rawImages)
+    : [thumbnail].filter(Boolean);
+
+  return {
+    ...p,
+    thumbnail,
+    variants,
+    images,
+  };
+};
+
 // ---------------------------------------------------------------------------
 // 3. PRODUCT MANAGEMENT (CRUD & LIVE STOCK CONTROL)
 // ---------------------------------------------------------------------------
@@ -262,11 +322,11 @@ const getAllProductsAdmin = async (req, res) => {
       return res.status(200).json({
         success: true,
         count: products.length,
-        products,
+        products: products.map(sanitizeProductItem),
       });
     }
 
-    let products = [...memoryStore.products];
+    let products = memoryStore.products.map(sanitizeProductItem);
     if (category !== 'all') {
       products = products.filter((p) => p.category?.toLowerCase() === category.toLowerCase());
     }
@@ -311,10 +371,18 @@ const createProductAdmin = async (req, res) => {
       reviews = 0,
     } = req.body;
 
+    const cleanAllImages = Array.isArray(images)
+      ? images.filter((img) => !isInvalidProductImage(img))
+      : [];
+    const cleanThumbnail = !isInvalidProductImage(thumbnail) ? thumbnail.trim() : '';
+    const cleanVariantImages = Array.isArray(variants)
+      ? variants.flatMap((v) => (Array.isArray(v.images) ? v.images.filter((img) => !isInvalidProductImage(img)) : []))
+      : [];
+
     const resolvedThumbnail = (
-      thumbnail ||
-      (Array.isArray(images) && images.length > 0 ? images[0] : '') ||
-      (Array.isArray(variants) && variants[0]?.images?.[0] ? variants[0].images[0] : '') ||
+      cleanThumbnail ||
+      cleanAllImages[0] ||
+      cleanVariantImages[0] ||
       ''
     ).trim();
 
@@ -337,7 +405,7 @@ const createProductAdmin = async (req, res) => {
     // Prepare variants: if not provided or empty, create default standard variant with all images
     let finalVariants = Array.isArray(variants) && variants.length > 0 ? variants : [];
     if (finalVariants.length === 0) {
-      const allImages = Array.isArray(images) && images.length > 0 ? images : [resolvedThumbnail];
+      const allImages = cleanAllImages.length > 0 ? cleanAllImages : [resolvedThumbnail];
       finalVariants = [
         {
           colorName: 'Standard',
@@ -350,7 +418,9 @@ const createProductAdmin = async (req, res) => {
       finalVariants = finalVariants.map((v) => ({
         colorName: (v.colorName || 'Standard').trim(),
         colorCode: (v.colorCode || '#000000').trim(),
-        images: Array.isArray(v.images) && v.images.length > 0 ? v.images : [resolvedThumbnail],
+        images: Array.isArray(v.images) && v.images.length > 0
+          ? v.images.filter((img) => !isInvalidProductImage(img))
+          : [resolvedThumbnail],
       }));
     }
 
@@ -432,12 +502,20 @@ const updateProductAdmin = async (req, res) => {
     if (updateFields.reviews !== undefined) updateFields.reviews = Math.max(0, Number(updateFields.reviews) || 0);
     if (updateFields.videoUrl !== undefined) updateFields.videoUrl = String(updateFields.videoUrl || '').trim();
 
-    // Sync thumbnail and variants if provided
+    // Sanitize thumbnail and variants if provided
+    if (updateFields.thumbnail !== undefined) {
+      updateFields.thumbnail = !isInvalidProductImage(updateFields.thumbnail)
+        ? String(updateFields.thumbnail).trim()
+        : '';
+    }
+
     if (Array.isArray(updateFields.variants) && updateFields.variants.length > 0) {
       updateFields.variants = updateFields.variants.map((v) => ({
         colorName: (v.colorName || 'Standard').trim(),
         colorCode: (v.colorCode || '#000000').trim(),
-        images: Array.isArray(v.images) ? v.images : [],
+        images: Array.isArray(v.images)
+          ? v.images.filter((img) => !isInvalidProductImage(img))
+          : [],
       }));
       if (!updateFields.thumbnail) {
         for (const v of updateFields.variants) {
@@ -448,15 +526,17 @@ const updateProductAdmin = async (req, res) => {
         }
       }
     } else if (Array.isArray(updateFields.images) && updateFields.images.length > 0) {
-      if (!updateFields.thumbnail) {
-        updateFields.thumbnail = updateFields.images[0];
+      const cleanImgs = updateFields.images.filter((img) => !isInvalidProductImage(img));
+      updateFields.images = cleanImgs;
+      if (!updateFields.thumbnail && cleanImgs.length > 0) {
+        updateFields.thumbnail = cleanImgs[0];
       }
       if (!updateFields.variants || updateFields.variants.length === 0) {
         updateFields.variants = [
           {
             colorName: 'Standard',
             colorCode: '#000000',
-            images: updateFields.images,
+            images: cleanImgs,
           },
         ];
       }
