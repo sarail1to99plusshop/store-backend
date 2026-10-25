@@ -146,21 +146,45 @@ const getBestMatchingDeliveryZone = (zones, district) => {
     return zones.find((z) => z.isDefault && z.isActive !== false) || zones[0];
   }
 
-  // If customer is in a local district (e.g. Brahmanbaria or Dhaka), prioritize the local inside zone
-  const localMatch = applicable.find(
-    (z) => getTargetDistrictForZone(z)?.toLowerCase() === district.trim().toLowerCase()
-  );
-  if (localMatch) return localMatch;
+  // 1. If customer is in Brahmanbaria, prioritize Brahmanbaria local zone (60 BDT)
+  if (district.trim().toLowerCase() === 'brahmanbaria') {
+    const bbMatch = applicable.find(
+      (z) =>
+        getTargetDistrictForZone(z)?.toLowerCase() === 'brahmanbaria' ||
+        z.id === 'inside-brahmanbaria' ||
+        z.charge === 60
+    );
+    if (bbMatch) return bbMatch;
+  }
 
-  // Otherwise, return the applicable zone (prioritizing default or outside)
+  // 2. If customer is in Dhaka, prioritize Dhaka city zone (120 BDT)
+  if (district.trim().toLowerCase() === 'dhaka') {
+    const dhakaMatch = applicable.find(
+      (z) =>
+        getTargetDistrictForZone(z)?.toLowerCase() === 'dhaka' ||
+        z.id === 'inside-dhaka' ||
+        z.charge === 120
+    );
+    if (dhakaMatch) return dhakaMatch;
+  }
+
+  // 3. For all other 62 districts (Outside Dhaka & Brahmanbaria / Rest of Bangladesh), prioritize outside zone (130 BDT)
+  const outsideMatch = applicable.find((z) => {
+    const loc = (z.location || '').toLowerCase();
+    const id = (z.id || '').toLowerCase();
+    return (
+      loc.includes('outside') ||
+      loc.includes('rest of') ||
+      loc.includes('আউটসাইড') ||
+      id.includes('outside') ||
+      z.charge === 130
+    );
+  });
+  if (outsideMatch) return outsideMatch;
+
+  // Fallback to default applicable or first applicable zone
   const defaultApplicable = applicable.find((z) => z.isDefault);
   if (defaultApplicable) return defaultApplicable;
-
-  const outsideZone = applicable.find((z) => {
-    const loc = (z.location || '').toLowerCase();
-    return loc.includes('outside') || loc.includes('আউটসাইড');
-  });
-  if (outsideZone) return outsideZone;
 
   return applicable[0];
 };

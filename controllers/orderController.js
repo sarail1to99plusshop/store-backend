@@ -12,12 +12,21 @@ const {
   getBestMatchingDeliveryZone,
 } = require('../utils/deliveryZoneRules');
 
-// Allowed server-side delivery fee dictionary
-const SERVER_DELIVERY_FEES = {
-  'Inside Dhaka': 60,
-  'inside-dhaka': 60,
-  'Outside Dhaka': 120,
-  'outside-dhaka': 120,
+// Standard delivery charges dictionary for Bangladesh:
+// 1. Inside Brahmanbaria City: 60 BDT
+// 2. Inside Dhaka City: 120 BDT
+// 3. Outside Dhaka and Brahmanbaria (Rest of Bangladesh): 130 BDT
+const STANDARD_DELIVERY_FEES = {
+  'Inside Brahmanbaria City': 60,
+  'inside-brahmanbaria': 60,
+  'Inside brahmanbaria': 60,
+  'Inside Dhaka City': 120,
+  'inside-dhaka': 120,
+  'Inside dhaka': 120,
+  'Outside Dhaka and Brahmanbaria (Rest of Bangladesh)': 130,
+  'outside-dhaka-brahmanbaria': 130,
+  'Outside brahmanbaria': 130,
+  'outside-brahmanbaria': 130,
 };
 
 /**
@@ -107,6 +116,10 @@ const createOrder = async (req, res) => {
       if (parts.length >= 2) {
         rawDistrict = parts[parts.length - 1];
         rawThana = parts[parts.length - 2];
+      }
+      if (rawDistrict.toLowerCase() === 'sarail') {
+        rawDistrict = 'Brahmanbaria';
+        if (!rawThana || rawThana.toLowerCase().includes('bazar')) rawThana = 'Sarail';
       }
     }
 
@@ -242,29 +255,40 @@ const createOrder = async (req, res) => {
       }
     }
 
-    const customerDistrict = (customerDetails.district || '').trim();
+    const customerDistrict = (rawDistrict || customerDetails.district || '').trim();
     const rawDeliveryZone = (customerDetails.deliveryLocation || '').trim();
     let matchedZone = activeCharges.find(
       (c) =>
         c.location?.toLowerCase() === rawDeliveryZone.toLowerCase() ||
-        c.id?.toLowerCase() === rawDeliveryZone.toLowerCase()
+        c.id?.toLowerCase() === rawDeliveryZone.toLowerCase() ||
+        (rawDeliveryZone.toLowerCase().includes('outside') && (c.id?.includes('outside') || c.location?.toLowerCase().includes('outside')))
     );
 
-    // If customer selected a district (e.g. Narsingdi) but submitted an incompatible zone (e.g. "Inside brahmanbaria"),
-    // enforce geographic integrity and adjust to the valid zone (e.g. "Outside brahmanbaria").
+    // If customer selected a district (e.g. Narsingdi) but submitted an incompatible zone (e.g. "Inside Brahmanbaria City"),
+    // or if no zone was specified, enforce geographic integrity and select the valid zone.
     if (customerDistrict) {
-      if (!matchedZone || !isZoneApplicableForDistrict(matchedZone, customerDistrict)) {
+      if (!matchedZone || !isZoneApplicableForDistrict(matchedZone, customerDistrict, activeCharges)) {
         const validZone = getBestMatchingDeliveryZone(activeCharges, customerDistrict);
         if (validZone) {
           matchedZone = validZone;
           customerDetails.deliveryLocation = validZone.location;
         }
       }
+    } else if (!matchedZone) {
+      matchedZone = getBestMatchingDeliveryZone(activeCharges, '');
+      if (matchedZone) {
+        customerDetails.deliveryLocation = matchedZone.location;
+      }
     }
 
+    const normDistrict = (customerDistrict || '').trim().toLowerCase();
     let validatedDeliveryFee = matchedZone
       ? matchedZone.charge
-      : (rawDeliveryZone.toLowerCase().includes('outside') ? 120 : 60);
+      : (normDistrict === 'brahmanbaria'
+          ? 60
+          : normDistrict === 'dhaka'
+          ? 120
+          : 130);
 
     if (req.body.deliveryFee !== undefined && !isNaN(Number(req.body.deliveryFee))) {
       const clientFee = Number(req.body.deliveryFee);
@@ -524,7 +548,11 @@ const createOrder = async (req, res) => {
         deliveryLocation:
           customerDetails.deliveryLocation ||
           matchedZone?.location ||
-          (validatedDeliveryFee === 120 ? 'Outside Dhaka' : 'Inside Dhaka'),
+          (normDistrict === 'brahmanbaria'
+            ? 'Inside Brahmanbaria City'
+            : normDistrict === 'dhaka'
+            ? 'Inside Dhaka City'
+            : 'Outside Dhaka and Brahmanbaria (Rest of Bangladesh)'),
       },
       items: verifiedItems.map((item) => ({
         product: item.productObjectId || item.product,
