@@ -676,13 +676,13 @@ describe('Backend Comprehensive Integrity Suite', () => {
       const { req, res, getStatus, getData } = mockReqRes({
         body: {
           customerDetails: {
-            name: 'Brahmanbaria Customer',
+            name: 'Outside District Customer',
             phone: '01733333333',
-            address: 'College Road, Sarail Sadar, Brahmanbaria',
+            address: 'College Road, Rangpur Sadar, Rangpur',
             deliveryLocation: 'Outside brahmanbaria',
           },
           items: [{ productId: 1, quantity: 1, price: 150 }],
-          deliveryFee: 120,
+          deliveryFee: 130,
           paymentMethod: 'Cash on Delivery',
         },
       });
@@ -690,7 +690,11 @@ describe('Backend Comprehensive Integrity Suite', () => {
       await createOrder(req, res);
       assert.equal(getStatus(), 201);
       assert.equal(getData().success, true);
-      assert.equal(getData().order.customerDetails.deliveryLocation, 'Outside brahmanbaria');
+      assert.ok(
+        getData().order.customerDetails.deliveryLocation.toLowerCase().includes('outside'),
+        'Delivery location should match the outside zone'
+      );
+      assert.equal(getData().order.deliveryFee, 130);
     });
   });
 
@@ -939,12 +943,12 @@ describe('Backend Comprehensive Integrity Suite', () => {
       assert.equal(getEnStatus(), 200);
     });
 
-    test('Geographic Delivery Enforcement: 3-tier rates (Inside Brahmanbaria ৳60, Inside Dhaka ৳120, Outside Brahmanbaria ৳130)', async () => {
+    test('Geographic Delivery Enforcement: 3-tier rates (Inside Brahmanbaria City ৳60, Inside Dhaka City ৳120, Outside Dhaka and Brahmanbaria ৳130)', async () => {
       const origCharges = [...memoryStore.deliveryCharges];
       memoryStore.deliveryCharges = [
-        { id: 'inside-brahmanbaria', location: 'Inside brahmanbaria', charge: 60, isDefault: true, isActive: true },
-        { id: 'outside-brahmanbaria', location: 'Outside brahmanbaria', charge: 130, isDefault: false, isActive: true },
-        { id: 'inside-dhaka', location: 'Inside dhaka', charge: 120, isDefault: false, isActive: true },
+        { id: 'inside-brahmanbaria', location: 'Inside Brahmanbaria City', charge: 60, isDefault: true, isActive: true },
+        { id: 'inside-dhaka', location: 'Inside Dhaka City', charge: 120, isDefault: false, isActive: true },
+        { id: 'outside-dhaka-brahmanbaria', location: 'Outside Dhaka and Brahmanbaria (Rest of Bangladesh)', charge: 130, isDefault: false, isActive: true },
       ];
 
       try {
@@ -959,7 +963,7 @@ describe('Backend Comprehensive Integrity Suite', () => {
               thana: 'Sarail',
               streetAddress: 'Sarail Sadar Bazar, Hospital Road',
               address: 'Sarail Sadar Bazar, Hospital Road, Sarail, Brahmanbaria',
-              deliveryLocation: 'Inside brahmanbaria',
+              deliveryLocation: 'Inside Brahmanbaria City',
             },
             items: [{ productId: 1, quantity: 1, price: 150 }],
             deliveryFee: 60,
@@ -968,7 +972,8 @@ describe('Backend Comprehensive Integrity Suite', () => {
         });
         await createOrder(r1, s1);
         assert.equal(d1().order.deliveryFee, 60);
-        assert.equal(d1().order.customerDetails.deliveryLocation, 'Inside brahmanbaria');
+        assert.equal(d1().order.customerDetails.deliveryLocation, 'Inside Brahmanbaria City');
+        assert.equal(d1().order.totalAmount, d1().order.itemsSubtotal + 60);
 
         // B. Dhaka gets 120
         const { req: r2, res: s2, getData: d2 } = mockReqRes({
@@ -981,7 +986,7 @@ describe('Backend Comprehensive Integrity Suite', () => {
               thana: 'Mirpur',
               streetAddress: 'Section 10, Block C, Road 5, House 12',
               address: 'Section 10, Block C, Road 5, House 12, Mirpur, Dhaka',
-              deliveryLocation: 'Inside dhaka',
+              deliveryLocation: 'Inside Dhaka City',
             },
             items: [{ productId: 1, quantity: 1, price: 150 }],
             deliveryFee: 120,
@@ -990,9 +995,10 @@ describe('Backend Comprehensive Integrity Suite', () => {
         });
         await createOrder(r2, s2);
         assert.equal(d2().order.deliveryFee, 120);
-        assert.equal(d2().order.customerDetails.deliveryLocation, 'Inside dhaka');
+        assert.equal(d2().order.customerDetails.deliveryLocation, 'Inside Dhaka City');
+        assert.equal(d2().order.totalAmount, d2().order.itemsSubtotal + 120);
 
-        // C. Narsingdi gets 130 (Outside brahmanbaria) even if client sends 60 or 120
+        // C. Narsingdi gets 130 (Outside Dhaka and Brahmanbaria) even if client sends 60 or 120
         const { req: r3, res: s3, getData: d3 } = mockReqRes({
           body: {
             customerDetails: {
@@ -1003,7 +1009,7 @@ describe('Backend Comprehensive Integrity Suite', () => {
               thana: 'Raipura',
               streetAddress: 'Hasimpur Village, North Para',
               address: 'Hasimpur Village, North Para, Raipura, Narsingdi',
-              deliveryLocation: 'Inside brahmanbaria', // Attempted bypass
+              deliveryLocation: 'Inside Brahmanbaria City', // Attempted bypass
             },
             items: [{ productId: 1, quantity: 1, price: 150 }],
             deliveryFee: 60,
@@ -1012,7 +1018,8 @@ describe('Backend Comprehensive Integrity Suite', () => {
         });
         await createOrder(r3, s3);
         assert.equal(d3().order.deliveryFee, 130);
-        assert.equal(d3().order.customerDetails.deliveryLocation, 'Outside brahmanbaria');
+        assert.equal(d3().order.customerDetails.deliveryLocation, 'Outside Dhaka and Brahmanbaria (Rest of Bangladesh)');
+        assert.equal(d3().order.totalAmount, d3().order.itemsSubtotal + 130);
       } finally {
         memoryStore.deliveryCharges = origCharges;
       }
