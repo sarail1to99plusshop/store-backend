@@ -147,9 +147,12 @@ app.use('/api/courier', courierRoutes);
 app.use('/api/locations', locationRoutes);
 
 // Convenience top-level endpoints
+const { getProductOgHtml } = require('./controllers/productController');
 app.get('/api/delivery-charges', getDeliveryCharges);
 app.get('/api/districts', getDistricts);
 app.post('/api/pre-orders', createPreOrder);
+app.get('/api/og/:id', getProductOgHtml);
+app.get('/product/:id', getProductOgHtml);
 
 // 404 Handler
 app.use((req, res) => {
