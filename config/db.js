@@ -3,12 +3,14 @@ const Product = require('../models/Product');
 const Category = require('../models/Category');
 const Review = require('../models/Review');
 const Order = require('../models/Order');
+const District = require('../models/District');
 const {
   initialProducts,
   initialCategories,
   initialReviews,
   initialOrders,
 } = require('../data/seedData');
+const { BANGLADESH_DISTRICTS } = require('../data/bangladeshDistricts');
 
 // Global cache for Vercel Serverless environment
 let cached = global.mongooseCache;
@@ -43,6 +45,12 @@ const seedDatabaseIfEmpty = async () => {
     if (orderCount === 0) {
       await Order.insertMany(initialOrders);
       console.log(`[MongoDB] Seeded ${initialOrders.length} sample order.`);
+    }
+
+    const districtCount = await District.countDocuments();
+    if (districtCount === 0) {
+      await District.insertMany(BANGLADESH_DISTRICTS);
+      console.log(`[MongoDB] Seeded ${BANGLADESH_DISTRICTS.length} Bangladesh districts.`);
     }
 
     cached.seeded = true;

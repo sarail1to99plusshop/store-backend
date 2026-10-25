@@ -45,6 +45,14 @@ const {
   deleteDeliveryChargeAdmin,
 } = require('../controllers/deliveryController');
 
+const {
+  getDistricts,
+  getDivisions,
+  checkDeliveryEligibility,
+  getAllDistrictsAdmin,
+  updateDistrictStatusAdmin,
+} = require('../controllers/locationController');
+
 const { memoryStore } = require('../data/seedData');
 
 // Helper to mock Express req and res
@@ -683,6 +691,331 @@ describe('Backend Comprehensive Integrity Suite', () => {
       assert.equal(getStatus(), 201);
       assert.equal(getData().success, true);
       assert.equal(getData().order.customerDetails.deliveryLocation, 'Outside brahmanbaria');
+    });
+  });
+
+  describe('7. Bangladesh 64 Districts & Geographic Delivery Compatibility Suite', () => {
+    test('getDistricts returns all 64 districts of Bangladesh with status 200', async () => {
+      const { req, res, getStatus, getData } = mockReqRes();
+      await getDistricts(req, res);
+
+      assert.equal(getStatus(), 200);
+      assert.equal(getData().success, true);
+      assert.equal(getData().count, 64);
+      assert.equal(getData().districts.length, 64);
+
+      // Verify essential districts
+      assert.ok(getData().districts.some((d) => d.name === 'Brahmanbaria' && d.bn === 'ব্রাহ্মণবাড়িয়া'));
+      assert.ok(getData().districts.some((d) => d.name === 'Narsingdi' && d.division === 'Dhaka'));
+      assert.ok(getData().districts.some((d) => d.name === 'Dhaka' && d.bn === 'ঢাকা'));
+    });
+
+    test('getDistricts filters by division (e.g. division=Dhaka returns 13 districts)', async () => {
+      const { req, res, getStatus, getData } = mockReqRes({
+        query: { division: 'Dhaka' },
+      });
+      await getDistricts(req, res);
+
+      assert.equal(getStatus(), 200);
+      assert.equal(getData().success, true);
+      assert.equal(getData().count, 13);
+      assert.ok(getData().districts.every((d) => d.division.toLowerCase() === 'dhaka'));
+      assert.ok(getData().districts.some((d) => d.name === 'Narsingdi'));
+      assert.ok(getData().districts.some((d) => d.name === 'Gazipur'));
+    });
+
+    test('getDivisions returns all 8 administrative divisions of Bangladesh', async () => {
+      const { req, res, getStatus, getData } = mockReqRes();
+      getDivisions(req, res);
+
+      assert.equal(getStatus(), 200);
+      assert.equal(getData().success, true);
+      assert.equal(getData().count, 8);
+      assert.ok(getData().divisions.some((d) => d.name === 'Dhaka'));
+      assert.ok(getData().divisions.some((d) => d.name === 'Chattogram'));
+      assert.ok(getData().divisions.some((d) => d.name === 'Sylhet'));
+    });
+
+    test('checkDeliveryEligibility identifies incompatible zone for Narsingdi vs Inside brahmanbaria', async () => {
+      const origCharges = [...memoryStore.deliveryCharges];
+      memoryStore.deliveryCharges = [
+        { id: 'inside-bb', location: 'Inside brahmanbaria', charge: 60, isDefault: true },
+        { id: 'outside-bb', location: 'Outside brahmanbaria', charge: 120, isDefault: false },
+      ];
+
+      try {
+        const { req, res, getStatus, getData } = mockReqRes({
+          query: {
+            district: 'Narsingdi',
+            deliveryLocation: 'Inside brahmanbaria',
+          },
+        });
+        await checkDeliveryEligibility(req, res);
+
+        assert.equal(getStatus(), 200);
+        assert.equal(getData().success, true);
+        assert.equal(getData().valid, false);
+        assert.ok(getData().message.includes('Narsingdi'));
+        assert.equal(getData().recommendedZone.charge, 120);
+        assert.equal(getData().recommendedZone.location, 'Outside brahmanbaria');
+      } finally {
+        memoryStore.deliveryCharges = origCharges;
+      }
+    });
+
+    test('Geographic Delivery Enforcement in createOrder: Automatically corrects Inside brahmanbaria to Outside brahmanbaria (৳120) when customer is in Narsingdi', async () => {
+      const origCharges = [...memoryStore.deliveryCharges];
+      memoryStore.deliveryCharges = [
+        { id: 'inside-bb', location: 'Inside brahmanbaria', charge: 60, isDefault: true },
+        { id: 'outside-bb', location: 'Outside brahmanbaria', charge: 120, isDefault: false },
+      ];
+
+      try {
+        const { req, res, getStatus, getData } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Narsingdi Customer',
+              phone: '01712345678',
+              division: 'Dhaka',
+              district: 'Narsingdi',
+              thana: 'Raipura',
+              streetAddress: 'Hasimpur Village, North Para, Raipura',
+              address: 'Hasimpur Village, North Para, Raipura, Narsingdi',
+              deliveryLocation: 'Inside brahmanbaria', // Erroneous local zone selection
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 60, // Client attempted to pay only 60
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+
+        await createOrder(req, res);
+        assert.equal(getStatus(), 201);
+        assert.equal(getData().success, true);
+        // Backend must strictly adjust delivery fee to 120 and zone to Outside brahmanbaria
+        assert.equal(getData().order.deliveryFee, 120);
+        assert.equal(getData().order.customerDetails.deliveryLocation, 'Outside brahmanbaria');
+        assert.equal(getData().order.totalAmount, getData().order.itemsSubtotal + 120);
+      } finally {
+        memoryStore.deliveryCharges = origCharges;
+      }
+    });
+
+    test('Geographic Delivery Enforcement in createOrder: Retains Inside brahmanbaria (৳60) when customer is in Brahmanbaria', async () => {
+      const origCharges = [...memoryStore.deliveryCharges];
+      memoryStore.deliveryCharges = [
+        { id: 'inside-bb', location: 'Inside brahmanbaria', charge: 60, isDefault: true },
+        { id: 'outside-bb', location: 'Outside brahmanbaria', charge: 120, isDefault: false },
+      ];
+
+      try {
+        const { req, res, getStatus, getData } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Sarail Local Customer',
+              phone: '01812345678',
+              division: 'Chattogram',
+              district: 'Brahmanbaria',
+              thana: 'Sarail',
+              streetAddress: 'Sarail Sadar Bazar, Main Road, Beside Hospital',
+              address: 'Sarail Sadar Bazar, Main Road, Beside Hospital, Sarail, Brahmanbaria',
+              deliveryLocation: 'Inside brahmanbaria',
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 60,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+
+        await createOrder(req, res);
+        assert.equal(getStatus(), 201);
+        assert.equal(getData().success, true);
+        assert.equal(getData().order.deliveryFee, 60);
+        assert.equal(getData().order.customerDetails.deliveryLocation, 'Inside brahmanbaria');
+        assert.equal(getData().order.totalAmount, getData().order.itemsSubtotal + 60);
+      } finally {
+        memoryStore.deliveryCharges = origCharges;
+      }
+    });
+
+    test('Geographic Delivery Enforcement: Standard Inside/Outside Dhaka also prevents Narsingdi choosing Inside Dhaka', async () => {
+      const origCharges = [...memoryStore.deliveryCharges];
+      memoryStore.deliveryCharges = [
+        { id: 'inside-dhaka', location: 'Inside Dhaka', charge: 60, isDefault: true },
+        { id: 'outside-dhaka', location: 'Outside Dhaka', charge: 120, isDefault: false },
+      ];
+
+      try {
+        const { req, res, getStatus, getData } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Narsingdi Customer',
+              phone: '01712345678',
+              division: 'Dhaka',
+              district: 'Narsingdi',
+              thana: 'Raipura',
+              streetAddress: 'Hasimpur Village, North Para, Raipura',
+              address: 'Hasimpur Village, North Para, Raipura, Narsingdi',
+              deliveryLocation: 'Inside Dhaka', // Narsingdi is not inside Dhaka city/district
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 60,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+
+        await createOrder(req, res);
+        assert.equal(getStatus(), 201);
+        assert.equal(getData().success, true);
+        assert.equal(getData().order.deliveryFee, 120);
+        assert.equal(getData().order.customerDetails.deliveryLocation, 'Outside Dhaka');
+      } finally {
+        memoryStore.deliveryCharges = origCharges;
+      }
+    });
+
+    test('getAllDistrictsAdmin returns all 64 districts with totalActive and totalDisabled', async () => {
+      const { req, res, getStatus, getData } = mockReqRes();
+      await getAllDistrictsAdmin(req, res);
+
+      assert.equal(getStatus(), 200);
+      assert.equal(getData().success, true);
+      assert.equal(getData().totalCount, 64);
+      assert.ok(getData().totalActive >= 1);
+    });
+
+    test('updateDistrictStatusAdmin toggles district status, verifies storefront exclusion, and blocks orders', async () => {
+      // 1. Disable Bandarban
+      const { req: disReq, res: disRes, getStatus: getDisStatus, getData: getDisData } = mockReqRes({
+        params: { id: 'Bandarban' },
+        body: { isActive: false },
+      });
+      await updateDistrictStatusAdmin(disReq, disRes);
+      assert.equal(getDisStatus(), 200);
+      assert.equal(getDisData().success, true);
+      assert.equal(getDisData().district.isActive, false);
+
+      // 2. Verify public getDistricts returns Bandarban marked as isActive: false (visible to customers as Not Available)
+      const { req: pubReq, res: pubRes, getData: getPubData } = mockReqRes();
+      await getDistricts(pubReq, pubRes);
+      const bandarban = getPubData().districts.find((d) => d.name === 'Bandarban');
+      assert.ok(bandarban, 'Disabled district should still be in public list');
+      assert.equal(bandarban.isActive, false, 'Disabled district must have isActive: false');
+
+      // 2b. Verify getDistricts with activeOnly=true excludes Bandarban
+      const { req: actReq, res: actRes, getData: getActData } = mockReqRes({ query: { activeOnly: 'true' } });
+      await getDistricts(actReq, actRes);
+      assert.ok(!getActData().districts.some((d) => d.name === 'Bandarban'), 'activeOnly=true should exclude disabled district');
+
+      // 3. Verify createOrder rejects an order to the disabled district
+      const { req: ordReq, res: ordRes, getStatus: getOrdStatus, getData: getOrdData } = mockReqRes({
+        body: {
+          customerDetails: {
+            name: 'Bandarban Customer',
+            phone: '01811111111',
+            division: 'Chattogram',
+            district: 'Bandarban',
+            thana: 'Bandarban Sadar',
+            streetAddress: 'Bazar Road, Beside Stadium',
+            address: 'Bazar Road, Beside Stadium, Bandarban Sadar, Bandarban',
+            deliveryLocation: 'Outside brahmanbaria',
+          },
+          items: [{ productId: 1, quantity: 1, price: 150 }],
+          deliveryFee: 130,
+          paymentMethod: 'Cash on Delivery',
+        },
+      });
+      await createOrder(ordReq, ordRes);
+      assert.equal(getOrdStatus(), 400);
+      assert.equal(getOrdData().success, false);
+      assert.ok(getOrdData().message.includes('Bandarban'));
+
+      // 4. Re-enable Bandarban
+      const { req: enReq, res: enRes, getStatus: getEnStatus } = mockReqRes({
+        params: { id: 'Bandarban' },
+        body: { isActive: true },
+      });
+      await updateDistrictStatusAdmin(enReq, enRes);
+      assert.equal(getEnStatus(), 200);
+    });
+
+    test('Geographic Delivery Enforcement: 3-tier rates (Inside Brahmanbaria ৳60, Inside Dhaka ৳120, Outside Brahmanbaria ৳130)', async () => {
+      const origCharges = [...memoryStore.deliveryCharges];
+      memoryStore.deliveryCharges = [
+        { id: 'inside-brahmanbaria', location: 'Inside brahmanbaria', charge: 60, isDefault: true, isActive: true },
+        { id: 'outside-brahmanbaria', location: 'Outside brahmanbaria', charge: 130, isDefault: false, isActive: true },
+        { id: 'inside-dhaka', location: 'Inside dhaka', charge: 120, isDefault: false, isActive: true },
+      ];
+
+      try {
+        // A. Brahmanbaria gets 60
+        const { req: r1, res: s1, getData: d1 } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Sarail Customer',
+              phone: '01711111111',
+              division: 'Chattogram',
+              district: 'Brahmanbaria',
+              thana: 'Sarail',
+              streetAddress: 'Sarail Sadar Bazar, Hospital Road',
+              address: 'Sarail Sadar Bazar, Hospital Road, Sarail, Brahmanbaria',
+              deliveryLocation: 'Inside brahmanbaria',
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 60,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+        await createOrder(r1, s1);
+        assert.equal(d1().order.deliveryFee, 60);
+        assert.equal(d1().order.customerDetails.deliveryLocation, 'Inside brahmanbaria');
+
+        // B. Dhaka gets 120
+        const { req: r2, res: s2, getData: d2 } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Mirpur Customer',
+              phone: '01722222222',
+              division: 'Dhaka',
+              district: 'Dhaka',
+              thana: 'Mirpur',
+              streetAddress: 'Section 10, Block C, Road 5, House 12',
+              address: 'Section 10, Block C, Road 5, House 12, Mirpur, Dhaka',
+              deliveryLocation: 'Inside dhaka',
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 120,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+        await createOrder(r2, s2);
+        assert.equal(d2().order.deliveryFee, 120);
+        assert.equal(d2().order.customerDetails.deliveryLocation, 'Inside dhaka');
+
+        // C. Narsingdi gets 130 (Outside brahmanbaria) even if client sends 60 or 120
+        const { req: r3, res: s3, getData: d3 } = mockReqRes({
+          body: {
+            customerDetails: {
+              name: 'Narsingdi Customer',
+              phone: '01733333333',
+              division: 'Dhaka',
+              district: 'Narsingdi',
+              thana: 'Raipura',
+              streetAddress: 'Hasimpur Village, North Para',
+              address: 'Hasimpur Village, North Para, Raipura, Narsingdi',
+              deliveryLocation: 'Inside brahmanbaria', // Attempted bypass
+            },
+            items: [{ productId: 1, quantity: 1, price: 150 }],
+            deliveryFee: 60,
+            paymentMethod: 'Cash on Delivery',
+          },
+        });
+        await createOrder(r3, s3);
+        assert.equal(d3().order.deliveryFee, 130);
+        assert.equal(d3().order.customerDetails.deliveryLocation, 'Outside brahmanbaria');
+      } finally {
+        memoryStore.deliveryCharges = origCharges;
+      }
     });
   });
 });
