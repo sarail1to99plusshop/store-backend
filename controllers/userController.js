@@ -2,6 +2,27 @@ const User = require('../models/User');
 const { isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 
+/**
+ * Validates and normalizes Bangladesh mobile phone number to canonical 11-digit 01... format.
+ * Accepts 01[3-9]XXXXXXXX, +8801[3-9]XXXXXXXX, or 8801[3-9]XXXXXXXX.
+ * Rejects non-BD, malformed, or incomplete numbers.
+ */
+const normalizeBDPhone = (phone) => {
+  if (!phone || typeof phone !== 'string') return null;
+  const cleaned = phone.replace(/[\s\-()]/g, '');
+  let digits = cleaned;
+  if (digits.startsWith('+8801')) {
+    digits = digits.slice(3);
+  } else if (digits.startsWith('8801')) {
+    digits = digits.slice(2);
+  }
+  const bdRegex = /^01[3-9]\d{8}$/;
+  if (bdRegex.test(digits)) {
+    return digits;
+  }
+  return null;
+};
+
 // POST /api/users/register
 // Stores newly registered account in MongoDB 'users' collection
 const registerUser = async (req, res) => {
@@ -24,6 +45,35 @@ const registerUser = async (req, res) => {
       });
     }
 
+    // Mandatory phone validation for manual/password sign-up (R01 / AUTH-01)
+    if (authProvider === 'password' || !authProvider) {
+      if (!phone || !String(phone).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'মোবাইল নম্বর দেওয়া আবশ্যক (Mobile number is required).',
+        });
+      }
+      const validPhone = normalizeBDPhone(phone);
+      if (!validPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'সঠিক বাংলাদেশি মোবাইল নম্বর দিন (যেমন: 01XXXXXXXXX)।',
+        });
+      }
+    }
+
+    let normalizedPhone = '';
+    if (phone && String(phone).trim()) {
+      const validPhone = normalizeBDPhone(phone);
+      if (!validPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'সঠিক বাংলাদেশি মোবাইল নম্বর দিন (যেমন: 01XXXXXXXXX)।',
+        });
+      }
+      normalizedPhone = validPhone;
+    }
+
     const normalizedEmail = email.trim().toLowerCase();
     const now = new Date();
 
@@ -37,7 +87,7 @@ const registerUser = async (req, res) => {
         user.email = normalizedEmail;
         if (displayName) user.displayName = displayName;
         if (photoURL) user.photoURL = photoURL;
-        if (phone) user.phone = phone;
+        if (normalizedPhone) user.phone = normalizedPhone;
         if (address) user.address = address;
         user.emailVerified = Boolean(emailVerified);
         user.lastLoginAt = now;
@@ -49,7 +99,7 @@ const registerUser = async (req, res) => {
           email: normalizedEmail,
           displayName: displayName || normalizedEmail.split('@')[0],
           photoURL,
-          phone,
+          phone: normalizedPhone,
           address,
           role: 'customer',
           authProvider,
@@ -74,6 +124,7 @@ const registerUser = async (req, res) => {
     if (existing) {
       existing.displayName = displayName || existing.displayName;
       existing.photoURL = photoURL || existing.photoURL;
+      if (normalizedPhone) existing.phone = normalizedPhone;
       existing.emailVerified = Boolean(emailVerified);
       existing.lastLoginAt = now.toISOString();
       existing.updatedAt = now.toISOString();
@@ -85,7 +136,7 @@ const registerUser = async (req, res) => {
         email: normalizedEmail,
         displayName: displayName || normalizedEmail.split('@')[0],
         photoURL,
-        phone,
+        phone: normalizedPhone,
         address,
         role: 'customer',
         authProvider,
@@ -301,10 +352,115 @@ const getAllUsers = async (req, res) => {
   }
 };
 
+// PUT /api/users/profile/phone or PATCH /api/users/profile/phone
+// Updates phone for existing Google or email/password account (R02 / AUTH-05 / AUTH-06 / AUTH-09)
+const updateUserPhone = async (req, res) => {
+  try {
+    const { uid, email, phone } = req.body;
+    const targetUid = (uid || req.user?.uid || '').trim();
+    const targetEmail = (email || req.user?.email || '').trim().toLowerCase();
+
+    if (!targetUid && !targetEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'uid or email is required to update phone number.',
+      });
+    }
+
+    // Security (AUTH-09 / R17):
+    // If request contains verified user token, prevent User A from updating User B's profile
+    if (req.user && req.user.role !== 'admin') {
+      const callerUid = req.user.uid;
+      const callerEmail = (req.user.email || '').toLowerCase();
+      if (targetUid && callerUid && targetUid !== callerUid) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You cannot update another user’s profile.',
+        });
+      }
+      if (targetEmail && callerEmail && targetEmail !== callerEmail) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You cannot update another user’s profile.',
+        });
+      }
+    }
+
+    if (!phone || typeof phone !== 'string' || !phone.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'মোবাইল নম্বর দেওয়া আবশ্যক (Mobile number is required).',
+      });
+    }
+
+    const normalizedPhone = normalizeBDPhone(phone);
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'সঠিক বাংলাদেশি মোবাইল নম্বর দিন (যেমন: 01XXXXXXXXX)।',
+      });
+    }
+
+    if (isMongoConnected()) {
+      const query = targetUid && targetEmail
+        ? { $or: [{ uid: targetUid }, { email: targetEmail }] }
+        : targetUid
+        ? { uid: targetUid }
+        : { email: targetEmail };
+
+      const user = await User.findOne(query);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User profile not found in database.',
+        });
+      }
+
+      user.phone = normalizedPhone;
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'মোবাইল নম্বর সফলভাবে সেভ করা হয়েছে।',
+        user,
+      });
+    }
+
+    // Memory fallback
+    let existing = memoryStore.users.find(
+      (u) => (targetUid && u.uid === targetUid) || (targetEmail && u.email === targetEmail)
+    );
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        message: 'User profile not found in memory store.',
+      });
+    }
+
+    existing.phone = normalizedPhone;
+    existing.updatedAt = new Date().toISOString();
+
+    return res.status(200).json({
+      success: true,
+      message: 'মোবাইল নম্বর সফলভাবে সেভ করা হয়েছে।',
+      user: existing,
+    });
+  } catch (error) {
+    console.error('Error in updateUserPhone:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update phone number.',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
+  normalizeBDPhone,
   registerUser,
   loginUser,
   getUserProfile,
+  updateUserPhone,
   getAllUsers,
 };
 

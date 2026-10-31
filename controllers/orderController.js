@@ -8,6 +8,7 @@ const { memoryStore } = require('../data/seedData');
 const { sendOrderCancelledEmail } = require('../services/emailService');
 const { createSteadfastConsignment } = require('../services/steadfastService');
 const {
+  normalizeDistrictName,
   isZoneApplicableForDistrict,
   getBestMatchingDeliveryZone,
 } = require('../utils/deliveryZoneRules');
@@ -295,7 +296,7 @@ const createOrder = async (req, res) => {
       }
     }
 
-    const normDistrict = (customerDistrict || '').trim().toLowerCase();
+    const normDistrict = normalizeDistrictName(customerDistrict).toLowerCase();
     let validatedDeliveryFee = matchedZone
       ? matchedZone.charge
       : (normDistrict === 'brahmanbaria'

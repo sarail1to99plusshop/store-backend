@@ -60,8 +60,6 @@ const handleSteadfastWebhook = async (req, res) => {
     if (rawStatus === 'delivered') {
       mappedOrderStatus = 'Delivered';
       updateFields.orderStatus = 'Delivered';
-      updateFields.deliveredAt = now;
-      updateFields['courierData.deliveredAt'] = now;
       // When COD parcel is delivered, payment is completed
       updateFields.paymentStatus = 'Paid';
     } else if (rawStatus === 'cancelled' || rawStatus === 'returned') {
@@ -97,6 +95,13 @@ const handleSteadfastWebhook = async (req, res) => {
     let updatedOrder = null;
 
     if (isMongoConnected()) {
+      if (rawStatus === 'delivered') {
+        const existing = await Order.findOne(query).select('deliveredAt courierData.deliveredAt').lean();
+        updateFields.deliveredAt = existing?.deliveredAt || now;
+        updateFields['courierData.deliveredAt'] =
+          existing?.courierData?.deliveredAt || existing?.deliveredAt || now;
+      }
+
       updatedOrder = await Order.findOneAndUpdate(
         query,
         { $set: updateFields },
@@ -123,8 +128,13 @@ const handleSteadfastWebhook = async (req, res) => {
         if (mappedOrderStatus) {
           match.orderStatus = mappedOrderStatus;
           if (mappedOrderStatus === 'Delivered') {
-            match.deliveredAt = now.toISOString();
-            match.courierData.deliveredAt = now.toISOString();
+            // Idempotent delivery timestamp preservation (REP-02)
+            if (!match.deliveredAt) {
+              match.deliveredAt = now.toISOString();
+            }
+            if (!match.courierData.deliveredAt) {
+              match.courierData.deliveredAt = match.deliveredAt;
+            }
             match.paymentStatus = 'Paid';
           } else if (mappedOrderStatus === 'Cancelled') {
             match.cancelledAt = now.toISOString();

@@ -878,7 +878,7 @@ describe('Backend Comprehensive Integrity Suite', () => {
       }
     });
 
-    test('Brahmanbaria Customer flexibility: customer can choose "Without Brahmanbaria City" (৳130) as well as "Inside Brahmanbaria City" (৳60)', async () => {
+    test('Brahmanbaria District locked rate (R04 / DEL-01 / DEL-05): Sarail Upazila or Sadar always maps to Brahmanbaria local rate (৳60)', async () => {
       const origCharges = [...memoryStore.deliveryCharges];
       memoryStore.deliveryCharges = [
         { id: 'inside-brahmanbaria', location: 'Inside Brahmanbaria City', charge: 60, isDefault: true, isActive: true },
@@ -887,7 +887,7 @@ describe('Backend Comprehensive Integrity Suite', () => {
       ];
 
       try {
-        // 1. Brahmanbaria customer selecting Without Brahmanbaria City (৳130)
+        // 1. Brahmanbaria customer with Sarail thana is locked to local rate ৳60 (even if client submitted 130)
         const { req: req1, res: res1, getStatus: getStatus1, getData: getData1 } = mockReqRes({
           body: {
             customerDetails: {
@@ -909,9 +909,9 @@ describe('Backend Comprehensive Integrity Suite', () => {
         await createOrder(req1, res1);
         assert.equal(getStatus1(), 201);
         assert.equal(getData1().success, true);
-        assert.equal(getData1().order.deliveryFee, 130);
-        assert.equal(getData1().order.totalAmount, getData1().order.itemsSubtotal + 130);
-        assert.ok(getData1().order.customerDetails.deliveryLocation.includes('Without Brahmanbaria'));
+        assert.equal(getData1().order.deliveryFee, 60);
+        assert.equal(getData1().order.totalAmount, getData1().order.itemsSubtotal + 60);
+        assert.ok(getData1().order.customerDetails.deliveryLocation.includes('Inside Brahmanbaria'));
 
         // 2. Brahmanbaria customer selecting Inside Brahmanbaria City (৳60)
         const { req: req2, res: res2, getStatus: getStatus2, getData: getData2 } = mockReqRes({
