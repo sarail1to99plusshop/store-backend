@@ -11,6 +11,50 @@
 const { BANGLADESH_DISTRICTS } = require('../data/bangladeshDistricts');
 
 /**
+ * Normalize district string to official canonical English name (e.g. 'Brahmanbaria', 'Dhaka').
+ * Handles English, Bangla (বাংলা), case, and common aliases.
+ * 
+ * @param {string} district
+ * @returns {string} - Canonical district name or trimmed original
+ */
+const normalizeDistrictName = (district) => {
+  if (!district || typeof district !== 'string') return '';
+  const clean = district.trim().toLowerCase();
+  if (!clean) return '';
+
+  // Direct alias checks
+  if (
+    clean === 'brahmanbaria' ||
+    clean === 'b.baria' ||
+    clean === 'b-baria' ||
+    clean === 'bbaria' ||
+    clean.includes('ব্রাহ্মণ') ||
+    clean.includes('বাড়িয়া') ||
+    clean.includes('বাড়িয়া')
+  ) {
+    return 'Brahmanbaria';
+  }
+
+  if (clean === 'dhaka' || clean.includes('ঢাকা')) {
+    return 'Dhaka';
+  }
+
+  const cleanUnicode = clean.normalize('NFC');
+  for (const d of BANGLADESH_DISTRICTS) {
+    if (
+      clean === d.name.toLowerCase() ||
+      clean === d.bn.toLowerCase() ||
+      cleanUnicode === d.name.toLowerCase().normalize('NFC') ||
+      cleanUnicode === d.bn.toLowerCase().normalize('NFC')
+    ) {
+      return d.name;
+    }
+  }
+
+  return district.trim();
+};
+
+/**
  * Detect if a delivery zone is an "inside / local" rate restricted to a specific district.
  * 
  * @param {object} zone - Delivery zone object { id, location, charge }
@@ -91,20 +135,23 @@ const isZoneApplicableForDistrict = (zone, district, allZones = []) => {
     return true;
   }
 
-  const normalizedDistrict = district.trim().toLowerCase();
+  const canon = normalizeDistrictName(district).toLowerCase();
   const targetDistrict = getTargetDistrictForZone(zone);
 
   if (targetDistrict) {
-    // This is a local "Inside [District] City" zone (e.g. Inside Brahmanbaria City or Inside Dhaka City).
+    // This is a local "Inside [District]" zone (e.g. Inside Brahmanbaria or Inside Dhaka City).
     // It is ONLY valid if the customer's district matches the target district!
-    return normalizedDistrict === targetDistrict.toLowerCase();
+    return canon === targetDistrict.toLowerCase();
   }
 
-  // This is a "Without City / Outside / Rest of Bangladesh" zone (130 BDT).
-  // It is valid across all 64 districts of Bangladesh:
-  // - In Brahmanbaria: for customers living without/outside Brahmanbaria City (e.g. Sarail, Kasba, Nabinagar, etc.)
-  // - In Dhaka: for customers living outside Dhaka City Corporation (e.g. Dhamrai, Dohar, Nawabganj, etc.)
-  // - Everywhere else: standard nationwide courier rate
+  // If this zone is an outside / nationwide zone:
+  // All upazilas/thanas in Brahmanbaria District use the district's local rate (R04).
+  // The district selection alone determines this; outside zone is NOT applicable for Brahmanbaria.
+  if (canon === 'brahmanbaria') {
+    return false;
+  }
+
+  // For other districts, outside / nationwide zone is applicable.
   return true;
 };
 
@@ -122,7 +169,7 @@ const getBestMatchingDeliveryZone = (zones, district, thana = '') => {
     return zones.find((z) => z.isDefault && z.isActive !== false) || zones[0];
   }
 
-  const normalizedDistrict = district.trim().toLowerCase();
+  const canon = normalizeDistrictName(district).toLowerCase();
   const normalizedThana = (thana || '').trim().toLowerCase();
 
   const applicable = zones.filter(
@@ -134,33 +181,24 @@ const getBestMatchingDeliveryZone = (zones, district, thana = '') => {
   }
 
   // 1. Brahmanbaria District:
-  if (normalizedDistrict === 'brahmanbaria') {
-    // If thana explicitly indicates outside city (e.g. Sarail, Ashuganj, Kasba, Nabinagar, etc.)
-    const isOutsideCityThana = [
-      'sarail', 'ashuganj', 'kasba', 'nabinagar', 'bancharampur',
-      'nasirnagar', 'akhaura', 'bijoynagar', 'সরাইল', 'আশুগঞ্জ', 'কসবা', 'নবীনগর'
-    ].some((t) => normalizedThana.includes(t));
+  // All upazilas/thanas in Brahmanbaria District use the district's local rate (initially ৳60).
+  // District selection alone determines this; thana text NEVER alters the fee.
+  if (canon === 'brahmanbaria') {
+    const bbMatch =
+      applicable.find((z) => getTargetDistrictForZone(z)?.toLowerCase() === 'brahmanbaria') ||
+      applicable.find((z) => z.id === 'inside-brahmanbaria') ||
+      applicable.find((z) => {
+        const loc = (z.location || '').toLowerCase();
+        return loc.includes('brahmanbaria') || loc.includes('ব্রাহ্মণবাড়িয়া');
+      }) ||
+      applicable.find((z) => z.charge === 60);
 
-    if (isOutsideCityThana) {
-      // Prioritize the "Without Brahmanbaria City" zone (130 BDT)
-      const withoutCityMatch = applicable.find(
-        (z) => z.charge === 130 || z.id?.includes('without') || z.id?.includes('outside')
-      );
-      if (withoutCityMatch) return withoutCityMatch;
-    }
-
-    // Default for Brahmanbaria (or if Sadar/City) is Inside Brahmanbaria City (60 BDT)
-    const bbMatch = applicable.find(
-      (z) =>
-        getTargetDistrictForZone(z)?.toLowerCase() === 'brahmanbaria' ||
-        z.id === 'inside-brahmanbaria' ||
-        z.charge === 60
-    );
     if (bbMatch) return bbMatch;
+    return applicable[0];
   }
 
   // 2. Dhaka District:
-  if (normalizedDistrict === 'dhaka') {
+  if (canon === 'dhaka') {
     const isOutsideDhakaThana = [
       'dhamrai', 'dohar', 'nawabganj', 'কেরানীগঞ্জ', 'ধামরাই', 'দোহার', 'নবাবগঞ্জ'
     ].some((t) => normalizedThana.includes(t));
@@ -181,7 +219,7 @@ const getBestMatchingDeliveryZone = (zones, district, thana = '') => {
     if (dhakaMatch) return dhakaMatch;
   }
 
-  // 3. For all other 62 districts (Rest of Bangladesh):
+  // 3. For all other districts (Rest of Bangladesh):
   const outsideMatch = applicable.find((z) => {
     const loc = (z.location || '').toLowerCase();
     const id = (z.id || '').toLowerCase();
@@ -220,7 +258,7 @@ const validateDeliveryEligibility = (zone, district, allZones = []) => {
     return { valid: true };
   }
 
-  const isValid = isZoneApplicableForDistrict(zone, district);
+  const isValid = isZoneApplicableForDistrict(zone, district, allZones);
   if (isValid) {
     return { valid: true };
   }
@@ -244,6 +282,7 @@ const validateDeliveryEligibility = (zone, district, allZones = []) => {
 };
 
 module.exports = {
+  normalizeDistrictName,
   getTargetDistrictForZone,
   isZoneApplicableForDistrict,
   getBestMatchingDeliveryZone,

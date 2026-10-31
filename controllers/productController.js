@@ -96,26 +96,16 @@ const getProducts = async (req, res) => {
     let rawProducts = [];
     let allAvailableTags = [];
 
+    // Strict product collection membership (R07 / COL-01 to COL-04)
+    // Only explicitly checked collection boolean flags determine collection membership.
+    // Removed all fallback inferences from tags, discounts, or recency.
     const normalizeCollections = (p) => {
       const existing = p.collections || {};
-      const tagLower = (p.tag || '').toLowerCase();
       return {
-        bestSelling:
-          existing.bestSelling !== undefined
-            ? Boolean(existing.bestSelling)
-            : Boolean(tagLower.includes('best') || tagLower.includes('top')),
-        newArrival:
-          existing.newArrival !== undefined
-            ? Boolean(existing.newArrival)
-            : Boolean(tagLower.includes('trending') || tagLower.includes('essential') || tagLower.includes('new')),
-        hotOffer:
-          existing.hotOffer !== undefined
-            ? Boolean(existing.hotOffer)
-            : Boolean(p.discount || tagLower.includes('hot') || tagLower.includes('deal')),
-        popular:
-          existing.popular !== undefined
-            ? Boolean(existing.popular)
-            : Boolean(tagLower.includes('popular')),
+        bestSelling: Boolean(existing.bestSelling),
+        newArrival: Boolean(existing.newArrival),
+        hotOffer: Boolean(existing.hotOffer),
+        popular: Boolean(existing.popular),
       };
     };
 
