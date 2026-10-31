@@ -4,6 +4,7 @@ const Review = require('../models/Review');
 const { isMongoConnected } = require('../config/db');
 const { memoryStore } = require('../data/seedData');
 const { computeRatingStats } = require('./reviewController');
+const { OFFICIAL_PRODUCT_TAGS, normalizeProductTag } = require('../utils/productTags');
 
 // GET /api/products
 // Supports pagination (default 10 products per page), category, tag, search, and sorting
@@ -165,14 +166,14 @@ const getProducts = async (req, res) => {
       });
     }
 
-    rawProducts = rawProducts.map(normalizeProductVariants);
+    // Normalize product variants and enforce official tags only (removes legacy tags like 'Daily Essential')
+    rawProducts = rawProducts.map((p) => ({
+      ...p,
+      tag: normalizeProductTag(p.tag, p.collections),
+    })).map(normalizeProductVariants);
 
-    // Collect unique tags across all products
-    const tagSet = new Set();
-    rawProducts.forEach((p) => {
-      if (p.tag) tagSet.add(p.tag);
-    });
-    allAvailableTags = Array.from(tagSet);
+    // Official 4 tags for Sarail 1 to 99+ Shop
+    allAvailableTags = [...OFFICIAL_PRODUCT_TAGS];
 
     // Filter products
     const normalizedCat = category.toLowerCase().replace(/[\s&]+/g, '-');
@@ -188,12 +189,18 @@ const getProducts = async (req, res) => {
         product.category === category ||
         prodCat === normalizedCat;
 
+      const pCols = product.collections || {};
+      const prodTagLower = (product.tag || '').toLowerCase();
+
       const matchesTag =
         tag === 'all' ||
         !tag ||
-        (product.tag && product.tag.toLowerCase() === normalizedTag);
+        prodTagLower === normalizedTag ||
+        (normalizedTag.includes('best') && (prodTagLower.includes('best') || pCols.bestSelling)) ||
+        ((normalizedTag.includes('new') || normalizedTag.includes('arrival')) && (prodTagLower.includes('new') || pCols.newArrival)) ||
+        ((normalizedTag.includes('hot') || normalizedTag.includes('deal')) && (prodTagLower.includes('hot') || pCols.hotOffer)) ||
+        ((normalizedTag.includes('popular') || normalizedTag.includes('hit')) && (prodTagLower.includes('popular') || pCols.popular));
 
-      const pCols = product.collections || {};
       const matchesCollection =
         normalizedCol === 'all' ||
         !normalizedCol ||
@@ -298,6 +305,7 @@ const getProductById = async (req, res) => {
       const { averageRating, totalReviews } = computeRatingStats(prodReviews);
       product.rating = averageRating;
       product.reviews = totalReviews;
+      product.tag = normalizeProductTag(product.tag, product.collections);
       if (!Array.isArray(product.variants) || product.variants.length === 0) {
         product.variants = [{ colorName: 'Standard', colorCode: '#000000', images: [product.thumbnail].filter(Boolean) }];
       }
@@ -331,6 +339,7 @@ const getProductById = async (req, res) => {
       success: true,
       product: normalizeProductVariants({
         ...product,
+        tag: normalizeProductTag(product.tag, product.collections),
         rating: averageRating,
         reviews: totalReviews,
       }),

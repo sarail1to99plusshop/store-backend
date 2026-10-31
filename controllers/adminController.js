@@ -18,6 +18,7 @@ const {
   getSteadfastAccountBalance,
   checkSteadfastDeliveryStatus,
 } = require('../services/steadfastService');
+const { OFFICIAL_PRODUCT_TAGS, normalizeProductTag } = require('../utils/productTags');
 
 // ---------------------------------------------------------------------------
 // 1. ADMIN AUTHENTICATION
@@ -278,8 +279,11 @@ const sanitizeProductItem = (p) => {
     ? (thumbnail ? [thumbnail, ...rawImages.filter((img) => img !== thumbnail)] : rawImages)
     : [thumbnail].filter(Boolean);
 
+  const cleanTag = normalizeProductTag(p.tag, p.collections);
+
   return {
     ...p,
+    tag: cleanTag,
     thumbnail,
     variants,
     images,
@@ -450,7 +454,7 @@ const createProductAdmin = async (req, res) => {
     const cleanDescription = typeof description === 'string' ? description.trim() : String(description || '').trim();
     const cleanWarranty = typeof warranty === 'string' ? warranty.trim() : String(warranty || '12 Months Replacement').trim();
     const cleanSku = typeof sku === 'string' ? sku.trim() : String(sku || `SAR-${nextId}`).trim();
-    const cleanTag = typeof tag === 'string' ? tag.trim() : String(tag || '').trim();
+    const cleanTag = normalizeProductTag(tag, collections);
     const cleanDiscount = typeof discount === 'string' ? discount.trim() : String(discount || '').trim();
     const cleanVideoUrl = typeof videoUrl === 'string' ? videoUrl.trim() : String(videoUrl || '').trim();
 
@@ -554,7 +558,9 @@ const updateProductAdmin = async (req, res) => {
     if (updateFields.name !== undefined) updateFields.name = String(updateFields.name || '').trim();
     if (updateFields.description !== undefined) updateFields.description = String(updateFields.description || '').trim();
     if (updateFields.sku !== undefined) updateFields.sku = String(updateFields.sku || '').trim();
-    if (updateFields.tag !== undefined) updateFields.tag = String(updateFields.tag || '').trim();
+    if (updateFields.tag !== undefined) {
+      updateFields.tag = normalizeProductTag(updateFields.tag, updateFields.collections);
+    }
     if (updateFields.discount !== undefined) updateFields.discount = String(updateFields.discount || '').trim();
 
     // Sanitize thumbnail and variants if provided
