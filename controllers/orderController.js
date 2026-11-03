@@ -52,14 +52,60 @@ const createOrder = async (req, res) => {
       courierData,
     } = req.body;
 
+    const idempotencyKey = (
+      req.body?.idempotencyKey ||
+      req.headers?.['x-idempotency-key'] ||
+      ''
+    ).trim();
+
+    // Idempotency deduplication check: If same request was submitted recently, return existing order safely
+    if (idempotencyKey) {
+      if (isMongoConnected()) {
+        const existingOrder = await Order.findOne({ idempotencyKey }).lean();
+        if (existingOrder) {
+          return res.status(200).json({
+            success: true,
+            message: 'Order already processed (idempotency matched).',
+            order: existingOrder,
+            idempotent: true,
+          });
+        }
+      } else {
+        const existingMem = memoryStore.orders.find(
+          (o) => o.idempotencyKey && o.idempotencyKey === idempotencyKey
+        );
+        if (existingMem) {
+          return res.status(200).json({
+            success: true,
+            message: 'Order already processed (idempotency matched).',
+            order: existingMem,
+            idempotent: true,
+          });
+        }
+      }
+    }
+
     // Ensure active MongoDB connection in serverless / cold-start environment
     if (!isMongoConnected()) {
       await connectDB().catch(() => {});
     }
 
+    // Durability check (T13): If production database is configured/required but disconnected,
+    // do not falsely claim in-memory order is a durable confirmed purchase.
+    if ((process.env.NODE_ENV === 'production' || process.env.MONGODB_URI) && !isMongoConnected()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database service is temporarily unavailable. Please retry in a few moments.',
+      });
+    }
+
     // 1. Validate Customer Contact Details & Enforce Detailed Delivery Address
     const rawName = (customerDetails?.name || '').trim();
     const rawPhone = (customerDetails?.phone || '').trim();
+    const rawEmail = (customerDetails?.email || '').trim().toLowerCase();
+    const hasEmailField = customerDetails && Object.prototype.hasOwnProperty.call(customerDetails, 'email');
+    const isGuest = !userId || !String(userId).trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const hasStructuredAddress = Boolean(
       customerDetails?.streetAddress ||
       customerDetails?.district ||
@@ -323,6 +369,21 @@ const createOrder = async (req, res) => {
       }
     }
 
+    // Email validation: strictly required and format-checked for guest orders; format-checked if provided for logged-in orders
+    if (isGuest && (hasEmailField || req.body?.isGuest || req.body?.guestOrder || req.headers?.['x-checkout-mode'] === 'guest')) {
+      if (!rawEmail || !emailRegex.test(rawEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'A valid email address is required for guest checkout to receive your invoice and order updates.',
+        });
+      }
+    } else if (rawEmail && !emailRegex.test(rawEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address.',
+      });
+    }
+
     // Helper to robustly extract product identifier across sanitized $oid/_oid/string/number formats
     const extractProductId = (it) => {
       if (!it) return null;
@@ -549,9 +610,10 @@ const createOrder = async (req, res) => {
     const orderPayload = {
       invoiceNumber: generatedInvoice,
       userId: String(userId || '').trim(),
+      idempotencyKey: idempotencyKey || '',
       customerDetails: {
         name: rawName,
-        email: (customerDetails.email || '').trim().toLowerCase(),
+        email: rawEmail || (customerDetails.email || '').trim().toLowerCase(),
         phone: cleanPhone,
         streetAddress: rawStreet,
         thana: rawThana,
@@ -645,6 +707,9 @@ const createOrder = async (req, res) => {
 
 /**
  * GET /api/orders/track?invoiceNumber=...&phone=...
+ * Public tracking with PII protection:
+ * - If both invoiceNumber and phone match: returns full order details
+ * - If only invoiceNumber is provided (or phone omitted): returns sanitized status without PII (phone/email masked, street address omitted)
  */
 const trackOrder = async (req, res) => {
   try {
@@ -662,47 +727,125 @@ const trackOrder = async (req, res) => {
       });
     }
 
+    let foundOrder = null;
+    let isFullyVerified = false;
+    const cleanPh = ph.replace(/[\s-]/g, '').replace(/^\+?88/, '');
+
     if (isMongoConnected()) {
-      const conditions = [];
-      if (inv) {
-        conditions.push({
+      if (inv && cleanPh) {
+        foundOrder = await Order.findOne({
           invoiceNumber: { $regex: new RegExp(`^${inv}$`, 'i') },
-        });
-      }
-      if (ph) {
-        conditions.push({
-          'customerDetails.phone': { $regex: new RegExp(ph, 'i') },
-        });
+          'customerDetails.phone': { $regex: new RegExp(cleanPh, 'i') },
+        }).lean();
+        if (foundOrder) isFullyVerified = true;
       }
 
-      const order = await Order.findOne({ $or: conditions })
-        .sort({ createdAt: -1 })
-        .lean();
+      if (!foundOrder && inv) {
+        foundOrder = await Order.findOne({
+          invoiceNumber: { $regex: new RegExp(`^${inv}$`, 'i') },
+        }).lean();
+      }
 
-      if (order) {
-        return res.status(200).json({
-          success: true,
-          order,
-        });
+      if (!foundOrder && cleanPh) {
+        foundOrder = await Order.findOne({
+          'customerDetails.phone': { $regex: new RegExp(cleanPh, 'i') },
+        })
+          .sort({ createdAt: -1 })
+          .lean();
+        if (foundOrder) isFullyVerified = true;
+      }
+    } else {
+      if (inv && cleanPh) {
+        foundOrder = memoryStore.orders.find(
+          (o) =>
+            o.invoiceNumber?.toLowerCase() === inv.toLowerCase() &&
+            (o.customerDetails?.phone || '').includes(cleanPh)
+        );
+        if (foundOrder) isFullyVerified = true;
+      }
+
+      if (!foundOrder && inv) {
+        foundOrder = memoryStore.orders.find(
+          (o) => o.invoiceNumber?.toLowerCase() === inv.toLowerCase()
+        );
+      }
+
+      if (!foundOrder && cleanPh) {
+        foundOrder = memoryStore.orders.find((o) =>
+          (o.customerDetails?.phone || '').includes(cleanPh)
+        );
+        if (foundOrder) isFullyVerified = true;
       }
     }
 
-    const matched = memoryStore.orders.find(
-      (o) =>
-        (inv && o.invoiceNumber?.toLowerCase() === inv.toLowerCase()) ||
-        (ph && o.customerDetails?.phone?.includes(ph))
-    );
-
-    if (matched) {
-      return res.status(200).json({
-        success: true,
-        order: matched,
+    if (!foundOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'No matching order found.',
       });
     }
 
-    return res.status(404).json({
-      success: false,
-      message: 'No matching order found.',
+    // Privacy & PII protection (T22):
+    // If only invoice number was given without matching phone, return sanitized tracking status with masked PII
+    if (!isFullyVerified) {
+      const rawPhone = foundOrder.customerDetails?.phone || '';
+      const maskedPhone = rawPhone.length >= 7
+        ? rawPhone.slice(0, 3) + '****' + rawPhone.slice(-4)
+        : '***';
+
+      const emailParts = (foundOrder.customerDetails?.email || '').split('@');
+      const maskedEmail = emailParts.length === 2 && emailParts[0].length >= 2
+        ? emailParts[0].slice(0, 2) + '***@' + emailParts[1]
+        : emailParts.length === 2
+        ? '*@' + emailParts[1]
+        : '';
+
+      const sanitizedOrder = {
+        invoiceNumber: foundOrder.invoiceNumber,
+        orderStatus: foundOrder.orderStatus,
+        paymentStatus: foundOrder.paymentStatus,
+        paymentMethod: foundOrder.paymentMethod,
+        totalAmount: foundOrder.totalAmount,
+        deliveryFee: foundOrder.deliveryFee,
+        itemsSubtotal: foundOrder.itemsSubtotal,
+        totalQuantity: foundOrder.totalQuantity,
+        createdAt: foundOrder.createdAt,
+        courierData: {
+          provider: foundOrder.courierData?.provider || 'Steadfast',
+          status: foundOrder.courierData?.status || 'pending',
+          trackingCode: foundOrder.courierData?.trackingCode || '',
+          trackingUrl: foundOrder.courierData?.trackingUrl || '',
+          deliveryStatus: foundOrder.courierData?.deliveryStatus || '',
+        },
+        items: (foundOrder.items || []).map((it) => ({
+          title: it.title,
+          quantity: it.quantity,
+          color: it.color,
+          price: it.price,
+          subtotal: it.subtotal,
+          image: it.image,
+        })),
+        customerDetails: {
+          name: foundOrder.customerDetails?.name || '',
+          phone: maskedPhone,
+          email: maskedEmail,
+          district: foundOrder.customerDetails?.district || '',
+          thana: foundOrder.customerDetails?.thana || '',
+          deliveryLocation: foundOrder.customerDetails?.deliveryLocation || '',
+          // Street/village address omitted for privacy
+        },
+        isMasked: true,
+      };
+
+      return res.status(200).json({
+        success: true,
+        order: sanitizedOrder,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      order: foundOrder,
     });
   } catch (error) {
     return res.status(500).json({
@@ -715,6 +858,9 @@ const trackOrder = async (req, res) => {
 
 /**
  * GET /api/orders or GET /api/orders/user/:email
+ * Secured order history:
+ * - If userId is provided (from authenticated user account), strictly filter by userId so guest orders are never falsely merged
+ * - If phone or email is provided without userId, search by matching contact
  */
 const getUserOrders = async (req, res) => {
   try {
@@ -733,22 +879,26 @@ const getUserOrders = async (req, res) => {
     }
 
     if (isMongoConnected()) {
-      const orConditions = [];
-      if (email) {
-        orConditions.push({
-          'customerDetails.email': { $regex: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-        });
-      }
+      let query = {};
       if (userId) {
-        orConditions.push({ userId });
-      }
-      if (phone) {
-        orConditions.push({
-          'customerDetails.phone': { $regex: new RegExp(phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
-        });
+        // Authenticated user account query: strictly match verified userId
+        query = { userId };
+      } else {
+        const orConditions = [];
+        if (email) {
+          orConditions.push({
+            'customerDetails.email': { $regex: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+          });
+        }
+        if (phone) {
+          orConditions.push({
+            'customerDetails.phone': { $regex: new RegExp(phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+          });
+        }
+        query = orConditions.length > 1 ? { $or: orConditions } : orConditions[0] || {};
       }
 
-      const orders = await Order.find({ $or: orConditions })
+      const orders = await Order.find(query)
         .sort({ createdAt: -1 })
         .lean();
 
@@ -760,12 +910,12 @@ const getUserOrders = async (req, res) => {
     }
 
     const orders = memoryStore.orders
-      .filter(
-        (o) =>
-          (email && o.customerDetails?.email?.toLowerCase() === email) ||
-          (userId && o.userId === userId) ||
-          (phone && o.customerDetails?.phone?.includes(phone))
-      )
+      .filter((o) => {
+        if (userId) return o.userId === userId;
+        if (email && o.customerDetails?.email?.toLowerCase() === email) return true;
+        if (phone && o.customerDetails?.phone?.includes(phone)) return true;
+        return false;
+      })
       .sort(
         (a, b) =>
           new Date(b.createdAt?.$date || b.createdAt || 0) -
@@ -866,6 +1016,32 @@ const cancelOrder = async (req, res) => {
         });
       }
 
+      // Authorization verification: if contact phone or email was passed, check that it matches order
+      const reqPhone = (req.body?.phone || req.query?.phone || '').trim();
+      const reqEmail = (req.body?.email || req.query?.email || '').trim().toLowerCase();
+      const authHeader = req.headers?.authorization || '';
+      const isAdmin = authHeader.includes('admin') || authHeader.startsWith('Bearer ');
+
+      if (reqPhone) {
+        const cleanReq = reqPhone.replace(/[\s-]/g, '').replace(/^\+?88/, '');
+        const cleanOrder = (order.customerDetails?.phone || '').replace(/[\s-]/g, '').replace(/^\+?88/, '');
+        if (cleanReq && cleanOrder && cleanReq !== cleanOrder && !isAdmin) {
+          return res.status(403).json({
+            success: false,
+            message: 'Verification failed: Phone number does not match this order.',
+          });
+        }
+      }
+      if (reqEmail) {
+        const orderEmail = (order.customerDetails?.email || '').toLowerCase();
+        if (reqEmail && orderEmail && reqEmail !== orderEmail && !isAdmin) {
+          return res.status(403).json({
+            success: false,
+            message: 'Verification failed: Email does not match this order.',
+          });
+        }
+      }
+
       if (order.orderStatus === 'Shipped' || order.orderStatus === 'Delivered') {
         return res.status(400).json({
           success: false,
@@ -913,6 +1089,32 @@ const cancelOrder = async (req, res) => {
         success: false,
         message: 'Order not found.',
       });
+    }
+
+    // Authorization verification: if contact phone or email was passed, check that it matches order
+    const reqPhone = (req.body?.phone || req.query?.phone || '').trim();
+    const reqEmail = (req.body?.email || req.query?.email || '').trim().toLowerCase();
+    const authHeader = req.headers?.authorization || '';
+    const isAdmin = authHeader.includes('admin') || authHeader.startsWith('Bearer ');
+
+    if (reqPhone) {
+      const cleanReq = reqPhone.replace(/[\s-]/g, '').replace(/^\+?88/, '');
+      const cleanOrder = (memOrder.customerDetails?.phone || '').replace(/[\s-]/g, '').replace(/^\+?88/, '');
+      if (cleanReq && cleanOrder && cleanReq !== cleanOrder && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'Verification failed: Phone number does not match this order.',
+        });
+      }
+    }
+    if (reqEmail) {
+      const orderEmail = (memOrder.customerDetails?.email || '').toLowerCase();
+      if (reqEmail && orderEmail && reqEmail !== orderEmail && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'Verification failed: Email does not match this order.',
+        });
+      }
     }
 
     if (memOrder.orderStatus === 'Shipped' || memOrder.orderStatus === 'Delivered') {
