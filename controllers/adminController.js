@@ -19,6 +19,7 @@ const {
   checkSteadfastDeliveryStatus,
 } = require('../services/steadfastService');
 const { OFFICIAL_PRODUCT_TAGS, normalizeProductTag } = require('../utils/productTags');
+const { getColorName } = require('../utils/colorNames');
 
 // ---------------------------------------------------------------------------
 // 1. ADMIN AUTHENTICATION
@@ -442,13 +443,18 @@ const createProductAdmin = async (req, res) => {
       ];
     } else {
       // Clean variants
-      finalVariants = finalVariants.map((v) => ({
-        colorName: typeof v.colorName === 'string' ? v.colorName.trim() : String(v.colorName || 'Standard').trim(),
-        colorCode: typeof v.colorCode === 'string' ? v.colorCode.trim() : String(v.colorCode || '#000000').trim(),
-        images: Array.isArray(v.images) && v.images.length > 0
-          ? v.images.filter((img) => !isInvalidProductImage(img))
-          : [resolvedThumbnail],
-      }));
+      finalVariants = finalVariants.map((v) => {
+        const rawCode = typeof v.colorCode === 'string' ? v.colorCode.trim() : String(v.colorCode || '#000000').trim();
+        const rawName = typeof v.colorName === 'string' ? v.colorName.trim() : String(v.colorName || '').trim();
+        const autoName = rawName || getColorName(rawCode) || 'Standard';
+        return {
+          colorName: autoName,
+          colorCode: rawCode,
+          images: Array.isArray(v.images) && v.images.length > 0
+            ? v.images.filter((img) => !isInvalidProductImage(img))
+            : [resolvedThumbnail],
+        };
+      });
     }
 
     const cleanDescription = typeof description === 'string' ? description.trim() : String(description || '').trim();
@@ -571,13 +577,18 @@ const updateProductAdmin = async (req, res) => {
     }
 
     if (Array.isArray(updateFields.variants) && updateFields.variants.length > 0) {
-      updateFields.variants = updateFields.variants.map((v) => ({
-        colorName: (v.colorName || 'Standard').trim(),
-        colorCode: (v.colorCode || '#000000').trim(),
-        images: Array.isArray(v.images)
-          ? v.images.filter((img) => !isInvalidProductImage(img))
-          : [],
-      }));
+      updateFields.variants = updateFields.variants.map((v) => {
+        const rawCode = (v.colorCode || '#000000').trim();
+        const rawName = (v.colorName || '').trim();
+        const resolvedName = rawName || getColorName(rawCode) || 'Standard';
+        return {
+          colorName: resolvedName,
+          colorCode: rawCode,
+          images: Array.isArray(v.images)
+            ? v.images.filter((img) => !isInvalidProductImage(img))
+            : [],
+        };
+      });
       if (!updateFields.thumbnail) {
         for (const v of updateFields.variants) {
           if (v.images && v.images.length > 0) {
@@ -1862,6 +1873,147 @@ const getUserOrdersAdmin = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/admin/ordering-customers
+ * Aggregates all unique purchasing customers directly from the orders collection.
+ * Distinguishes genuine Registered Accounts from Guest Orders without creating fake users.
+ */
+const getOrderingCustomersAdmin = async (req, res) => {
+  try {
+    const { search = '', type = 'all' } = req.query; // type: 'all', 'registered', 'guest'
+
+    let ordersList = [];
+    let usersList = [];
+
+    if (isMongoConnected()) {
+      ordersList = await Order.find()
+        .select('invoiceNumber userId customerDetails items totalAmount orderStatus paymentStatus paymentMethod createdAt')
+        .sort({ createdAt: -1 })
+        .lean();
+      usersList = await User.find().select('uid email phone displayName createdAt').lean();
+    } else {
+      ordersList = [...memoryStore.orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      usersList = [...memoryStore.users];
+    }
+
+    // Build lookup sets for genuine registered users
+    const registeredUids = new Set(usersList.map((u) => u.uid).filter(Boolean));
+    const registeredEmails = new Set(usersList.map((u) => u.email?.toLowerCase()).filter(Boolean));
+    const userMap = new Map();
+    usersList.forEach((u) => {
+      if (u.uid) userMap.set(u.uid, u);
+      if (u.email) userMap.set(u.email.toLowerCase(), u);
+    });
+
+    // Group orders by stable customer identity: normalized Bangladeshi phone, or customer email, or userId
+    const customerGroups = new Map();
+
+    for (const order of ordersList) {
+      const details = order.customerDetails || {};
+      const rawPhone = (details.phone || '').trim();
+      const cleanPhone = rawPhone.replace(/[\s-]/g, '').replace(/^\+?88/, '');
+      const cleanEmail = (details.email || '').trim().toLowerCase();
+      const orderUserId = (order.userId || '').trim();
+
+      // Determine grouping key
+      const key = cleanPhone || cleanEmail || orderUserId || order.invoiceNumber;
+      if (!key) continue;
+
+      // Determine if this order was placed by an authentic registered user
+      const isOrderRegistered = Boolean(
+        (orderUserId && registeredUids.has(orderUserId)) ||
+        (cleanEmail && registeredEmails.has(cleanEmail) && orderUserId)
+      );
+
+      if (!customerGroups.has(key)) {
+        const matchedUser = orderUserId ? userMap.get(orderUserId) : (cleanEmail ? userMap.get(cleanEmail) : null);
+        customerGroups.set(key, {
+          id: key,
+          name: details.name || matchedUser?.displayName || 'Customer',
+          phone: rawPhone || details.phone || matchedUser?.phone || '',
+          email: cleanEmail || details.email || matchedUser?.email || '',
+          district: details.district || '',
+          thana: details.thana || '',
+          streetAddress: details.streetAddress || details.address || '',
+          fullAddress: details.fullAddress || details.address || '',
+          customerType: isOrderRegistered ? 'Registered' : 'Guest',
+          userId: orderUserId || '',
+          orderCount: 0,
+          totalSpent: 0,
+          orders: [],
+          lastOrderDate: order.createdAt,
+          latestStatus: order.orderStatus,
+        });
+      }
+
+      const group = customerGroups.get(key);
+      group.orderCount += 1;
+      group.totalSpent += Number(order.totalAmount) || 0;
+      if (isOrderRegistered) {
+        group.customerType = 'Registered';
+        if (orderUserId) group.userId = orderUserId;
+      }
+      group.orders.push({
+        invoiceNumber: order.invoiceNumber,
+        totalAmount: Number(order.totalAmount) || 0,
+        orderStatus: order.orderStatus,
+        paymentStatus: order.paymentStatus,
+        paymentMethod: order.paymentMethod,
+        createdAt: order.createdAt,
+      });
+    }
+
+    let customers = Array.from(customerGroups.values());
+
+    // Search filter
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      customers = customers.filter(
+        (c) =>
+          c.name.toLowerCase().includes(s) ||
+          c.phone.toLowerCase().includes(s) ||
+          c.email.toLowerCase().includes(s) ||
+          c.district.toLowerCase().includes(s) ||
+          c.thana.toLowerCase().includes(s) ||
+          c.orders.some((o) => o.invoiceNumber.toLowerCase().includes(s))
+      );
+    }
+
+    // Type filter: 'all', 'registered', 'guest'
+    if (type === 'registered') {
+      customers = customers.filter((c) => c.customerType === 'Registered');
+    } else if (type === 'guest') {
+      customers = customers.filter((c) => c.customerType === 'Guest');
+    }
+
+    // Calculate KPIs
+    const totalOrderingCustomers = customerGroups.size;
+    const guestCustomers = Array.from(customerGroups.values()).filter((c) => c.customerType === 'Guest').length;
+    const registeredOrderingCustomers = Array.from(customerGroups.values()).filter((c) => c.customerType === 'Registered').length;
+    const totalRevenue = Array.from(customerGroups.values()).reduce((acc, c) => acc + c.totalSpent, 0);
+
+    return res.status(200).json({
+      success: true,
+      count: customers.length,
+      kpis: {
+        totalOrderingCustomers,
+        guestCustomers,
+        registeredOrderingCustomers,
+        totalOrders: ordersList.length,
+        totalRevenue,
+      },
+      customers,
+    });
+  } catch (error) {
+    console.error('Error in getOrderingCustomersAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch ordering customers.',
+      error: error.message,
+    });
+  }
+};
+
 // ---------------------------------------------------------------------------
 // 7. PRE-ORDER MANAGEMENT (ADMIN)
 // ---------------------------------------------------------------------------
@@ -1931,6 +2083,70 @@ const updatePreOrderStatusAdmin = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to update pre-order status.',
+      error: error.message,
+    });
+  }
+};
+
+const deletePreOrderAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Pre-order ID is required.' });
+    }
+
+    const cleanId = String(id).trim();
+
+    // Check & remove from memoryStore
+    const memIdx = memoryStore.preOrders.findIndex(
+      (p) => String(p._id) === cleanId || String(p.id) === cleanId
+    );
+    let memRemoved = null;
+    if (memIdx !== -1) {
+      memRemoved = memoryStore.preOrders.splice(memIdx, 1)[0];
+    }
+
+    if (isMongoConnected()) {
+      let deleted = null;
+      if (mongoose.Types.ObjectId.isValid(cleanId)) {
+        deleted = await PreOrder.findByIdAndDelete(cleanId).lean();
+      } else {
+        deleted = await PreOrder.findOneAndDelete({
+          $or: [{ _id: cleanId }, { id: cleanId }],
+        }).lean();
+      }
+
+      if (deleted || memRemoved) {
+        return res.status(200).json({
+          success: true,
+          message: 'Customer pre-order deleted successfully.',
+          deletedPreOrder: deleted || memRemoved,
+        });
+      }
+
+      return res.status(404).json({
+        success: false,
+        message: 'Pre-order not found.',
+      });
+    }
+
+    if (memRemoved) {
+      return res.status(200).json({
+        success: true,
+        message: 'Customer pre-order deleted successfully.',
+        deletedPreOrder: memRemoved,
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: 'Pre-order not found.',
+    });
+  } catch (error) {
+    console.error('Error in deletePreOrderAdmin:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete pre-order.',
       error: error.message,
     });
   }
@@ -2151,9 +2367,11 @@ module.exports = {
   markOrderViewedAdmin,
   markAllOrdersViewedAdmin,
   getAllUsersAdmin,
+  getOrderingCustomersAdmin,
   getUserOrdersAdmin,
   getAllPreOrdersAdmin,
   updatePreOrderStatusAdmin,
+  deletePreOrderAdmin,
   sendOrderInvoiceEmailAdmin,
   testEmailConfigAdmin,
   getSteadfastBalanceAdmin,

@@ -18,9 +18,11 @@ const {
   markOrderViewedAdmin,
   markAllOrdersViewedAdmin,
   getAllUsersAdmin,
+  getOrderingCustomersAdmin,
   getUserOrdersAdmin,
   getAllPreOrdersAdmin,
   updatePreOrderStatusAdmin,
+  deletePreOrderAdmin,
   sendOrderInvoiceEmailAdmin,
   testEmailConfigAdmin,
   getSteadfastBalanceAdmin,
@@ -93,11 +95,13 @@ router.delete('/orders/:invoiceNumber', deleteOrderAdmin);
 
 // User & Customer Management & User Orders
 router.get('/users', getAllUsersAdmin);
+router.get('/ordering-customers', getOrderingCustomersAdmin);
 router.get('/users/:identifier/orders', getUserOrdersAdmin);
 
 // Pre-Orders Management (Admin)
 router.get('/pre-orders', getAllPreOrdersAdmin);
 router.patch('/pre-orders/:id', updatePreOrderStatusAdmin);
+router.delete('/pre-orders/:id', deletePreOrderAdmin);
 
 // Monthly Delivered Product Reports
 router.get('/reports/monthly', getDeliveredMonthlyReport);

@@ -72,6 +72,12 @@ const orderSchema = new mongoose.Schema(
       index: true,
       trim: true,
     },
+    idempotencyKey: {
+      type: String,
+      default: '',
+      index: true,
+      trim: true,
+    },
     customerDetails: {
       name: { type: String, required: true, trim: true },
       email: { type: String, default: '', lowercase: true, trim: true, index: true },

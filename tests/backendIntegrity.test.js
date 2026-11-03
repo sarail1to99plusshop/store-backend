@@ -11,6 +11,7 @@ const {
   deleteOrderAdmin,
   getAllPreOrdersAdmin,
   updatePreOrderStatusAdmin,
+  deletePreOrderAdmin,
   sendOrderInvoiceEmailAdmin,
 } = require('../controllers/adminController');
 const {
@@ -318,6 +319,34 @@ describe('Backend Comprehensive Integrity Suite', () => {
       assert.equal(getStatus(), 200);
       assert.equal(getData().success, true);
       assert.equal(getData().preOrder.status, 'Contacted');
+    });
+
+    test('deletePreOrderAdmin permanently deletes customer pre-order', async () => {
+      const { req, res, getStatus, getData } = mockReqRes({
+        params: { id: createdPreOrderId },
+      });
+
+      await deletePreOrderAdmin(req, res);
+      assert.equal(getStatus(), 200);
+      assert.equal(getData().success, true);
+      assert.equal(getData().message, 'Customer pre-order deleted successfully.');
+
+      // Verify it no longer appears in pre-orders list
+      const listReqRes = mockReqRes();
+      await getAllPreOrdersAdmin(listReqRes.req, listReqRes.res);
+      assert.equal(listReqRes.getStatus(), 200);
+      const preOrders = listReqRes.getData().preOrders;
+      assert.ok(!preOrders.some((p) => String(p._id) === createdPreOrderId));
+    });
+
+    test('deletePreOrderAdmin returns 404 for nonexistent pre-order', async () => {
+      const { req, res, getStatus, getData } = mockReqRes({
+        params: { id: 'nonexistent-preorder-id' },
+      });
+
+      await deletePreOrderAdmin(req, res);
+      assert.equal(getStatus(), 404);
+      assert.equal(getData().success, false);
     });
   });
 
